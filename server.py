@@ -28,6 +28,7 @@ import asyncio
 import json
 import tempfile
 import time
+from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile
 from fastapi.responses import FileResponse, Response
@@ -39,7 +40,18 @@ from core.document import Document, circle, dimension, line, rect, text
 from core.export import to_dxf, to_gcode, to_png_pdf, to_svg
 from core.runner import run
 
-app = FastAPI(title="sketchDiy")
+
+@asynccontextmanager
+async def _lifespan(app):  # noqa: A002 - FastAPI lifespan signature
+    # Nothing to set up at start. On shutdown, release the 3D worker pool so the
+    # Open Cascade kernel loaded in each worker process isn't orphaned.
+    try:
+        yield
+    finally:
+        worker3d.shutdown()
+
+
+app = FastAPI(title="sketchDiy", lifespan=_lifespan)
 
 
 @app.middleware("http")
@@ -270,6 +282,8 @@ async def build_3d(payload: dict):
             mesh = await worker3d.run(
                 part3d.extrude_to_mesh, doc.to_dict(), objs, depth, True
             )
+    except worker3d.JobTimeoutError as e:
+        raise HTTPException(504, str(e)) from e
     except (ValueError, RuntimeError) as e:
         raise HTTPException(400, str(e)) from e
     # build123d flag is computed inside the worker and returned on the mesh.
@@ -327,6 +341,9 @@ async def export_3d(payload: dict):
         await worker3d.run(
             part3d.export_solid, outlines, op, depth, angle, fmt, str(path), None
         )
+    except worker3d.JobTimeoutError as e:
+        path.unlink(missing_ok=True)
+        raise HTTPException(504, str(e)) from e
     except (ValueError, RuntimeError) as e:
         path.unlink(missing_ok=True)
         raise HTTPException(400, str(e)) from e

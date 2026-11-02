@@ -1,10 +1,18 @@
 """Tests for the async 3D API routes (offloaded to a process-pool worker)."""
 
 import asyncio
+import time
 
+import pytest
 from fastapi.testclient import TestClient
 import server
 from core import part3d
+
+
+def _slow_job():
+    """Picklable helper used to exercise the worker job timeout."""
+    time.sleep(2.0)
+    return "done"
 
 
 def test_3d_build_extrude():
@@ -76,3 +84,29 @@ def test_worker_offloads_to_process_pool():
     # A process pool was created and used (or a thread fallback if multiprocessing
     # is unavailable — either way the request completes off the event loop).
     assert worker3d.executor_kind() in ("process", "thread")
+
+
+def test_worker_job_timeout_is_not_retried():
+    """A job that exceeds the timeout raises JobTimeoutError instead of hanging
+    the event-loop thread (it must NOT be retried in-process)."""
+    from core import worker3d
+
+    # _slow_job is module-level (picklable) so this exercises the process pool;
+    # on a thread-fallback machine the timeout still applies via wait_for.
+    with pytest.raises(worker3d.JobTimeoutError):
+        asyncio.run(worker3d.run(_slow_job, timeout=0.2))
+
+
+def test_worker_shutdown_is_safe_and_idempotent():
+    """shutdown() tears down the pool without error and can be called repeatedly."""
+    from core import worker3d
+
+    # Ensure a pool exists first.
+    worker3d.get_executor()
+    worker3d.shutdown()
+    # Calling again must be safe (idempotent teardown).
+    worker3d.shutdown()
+    # A subsequent job recreates the pool (or uses the thread fallback).
+    worker3d.get_executor()
+    assert worker3d.executor_kind() in ("process", "thread")
+

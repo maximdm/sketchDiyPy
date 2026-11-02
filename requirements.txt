@@ -1,3 +1,17 @@
+# Base install — runs the 2D app and the test suite. The 3D features are
+# OPTIONAL and intentionally excluded here so a plain `pip install -r
+# requirements.txt` stays lightweight (no Open Cascade / trimesh).
+#
+# Preferred install (uses pyproject extras):
+#   pip install .            # base only
+#   pip install .[3d]        # + build123d + trimesh
+#   pip install .[test]      # + pytest + playwright
+#   pip install .[3d,test]   # everything
+#
+# Flat-file equivalents:
+#   pip install -r requirements-3d.txt     # base + 3D deps
+#   pip install -r requirements-dev.txt    # base + 3D + Playwright UI smoke
+
 fastapi
 uvicorn[standard]
 matplotlib
@@ -5,19 +19,3 @@ pillow
 scikit-image
 python-multipart
 pytest
-# Optional: only needed for the optional Playwright UI smoke test (tests/test_ui_smoke.py).
-# Install with: pip install playwright && playwright install chromium
-playwright
-
-# Optional: 3D extrude feature (core/part3d.py). When installed, /api/3d/export can
-# produce accurate STL + STEP and the preview uses exact tessellation. Without it the
-# app still runs and the 3D panel falls back to a simple prism mesh + STL export.
-#   pip install build123d
-build123d
-
-# Optional: mesh repair/validation for the *fallback* (no-build123d) 3D path. When
-# present, the pure-Python prism/revolve meshes are cleaned (degenerate/duplicate
-# faces removed, winding fixed) before preview + STL export. Lazy-imported, so the
-# 2D app never pays for it unless a fallback mesh is actually built.
-#   pip install trimesh
-trimesh

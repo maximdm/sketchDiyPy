@@ -1,0 +1,18 @@
+# Normalize line endings to LF on commit; files are checked out with the
+# platform's native line ending. Stops the "LF will be replaced by CRLF" noise
+# on Windows and keeps diffs clean across operating systems.
+* text=auto eol=lf
+
+# Vendored binary assets: never normalize, never diff as text.
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.ico binary
+*.woff binary
+*.woff2 binary
+*.ttf binary
+
+# Vendored minified JS/CSS are text but we don't want them treated as mergeable
+# source; keep them as-is (LF) without attempting smart merge.
+static/vendor/** linguist-vendored

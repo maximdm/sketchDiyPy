@@ -1,3 +1,35 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "sketchdiy"
+version = "0.1.0"
+description = "2D vector design tool for makers, with optional 3D extrude/revolve."
+requires-python = ">=3.10"
+# Base (lightweight) runtime deps — the 2D app starts and runs without build123d.
+dependencies = [
+    "fastapi",
+    "uvicorn[standard]",
+    "matplotlib",
+    "pillow",
+    "scikit-image",
+    "python-multipart",
+]
+
+[project.optional-dependencies]
+# 3D extrude/revolve feature. Both are lazily imported, so the 2D app stays
+# lightweight without them:
+#   * build123d  -> accurate STL/STEP export + exact tessellation preview
+#   * trimesh    -> cleans the no-build123d fallback meshes
+3d = ["build123d", "trimesh"]
+# Test tooling. The Playwright UI smoke test is gated behind UI_SMOKE_RUN=1.
+test = ["pytest", "playwright"]
+
+[tool.setuptools]
+packages = ["core"]
+py-modules = ["server"]
+
 [tool.pytest.ini_options]
 pythonpath = ["."]
 testpaths = ["tests"]

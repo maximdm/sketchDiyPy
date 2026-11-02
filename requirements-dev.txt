@@ -1,0 +1,11 @@
+# Full developer install: base + 3D deps + the optional Playwright UI smoke
+# test (tests/test_ui_smoke.py, gated behind UI_SMOKE_RUN=1).
+#   pip install -r requirements-dev.txt
+# Then, to run the browser-based UI check:
+#   playwright install chromium
+
+-r requirements-3d.txt
+
+# Playwright is only needed for the optional UI smoke test; the rest of the
+# suite runs without it.
+playwright

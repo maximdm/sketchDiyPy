@@ -1,0 +1,11 @@
+# Everything in the base install, plus the optional 3D dependencies.
+#   pip install -r requirements-3d.txt
+#
+# Equivalent to `pip install .[3d]` (base deps are pulled in via -r below).
+-r requirements.txt
+
+# build123d: accurate STL/STEP export + exact tessellation preview.
+# trimesh: cleans the no-build123d fallback meshes (degenerate/duplicate faces).
+# Both are lazily imported, so the 2D app still runs without them.
+build123d
+trimesh

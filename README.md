@@ -20,11 +20,17 @@ formats cutters, lasers, and printers actually use.
 ```powershell
 cd sketchDiy
 python -m venv venv            # already created
-venv\Scripts\python -m pip install -r requirements.txt
+venv\Scripts\python -m pip install -r requirements.txt   # base, lightweight (2D + tests)
+# Optional 3D features (accurate STL/STEP + mesh cleanup):
+venv\Scripts\python -m pip install -r requirements-3d.txt
 venv\Scripts\python -m uvicorn server:app --reload
 ```
 
 Open http://127.0.0.1:8000
+
+> Install shortcuts (equivalent, via pyproject extras): `pip install .` (base),
+> `pip install .[3d]` (base + build123d + trimesh), `pip install .[test]` or
+> `pip install .[3d,test]` (adds pytest + Playwright).
 
 ## What works today
 

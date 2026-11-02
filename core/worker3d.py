@@ -19,6 +19,7 @@ succeeds.
 from __future__ import annotations
 
 import asyncio
+import atexit
 import multiprocessing
 import os
 from concurrent.futures import ProcessPoolExecutor
@@ -27,10 +28,48 @@ from concurrent.futures import ProcessPoolExecutor
 # (~hundreds of MB), so we don't want one process per CPU core by default.
 _DEFAULT_WORKERS = 2
 
+# Per-job timeout (seconds) for worker calls. A hung kernel op would otherwise
+# block the request forever; configurable via SKETCHDIY_3D_TIMEOUT.
+_DEFAULT_TIMEOUT_SECS = 120.0
+
 # None  => not yet created
 # False => creation failed (use thread fallback)
 # Executor => ready to use
 _executor = None
+
+
+class JobTimeoutError(Exception):
+    """Raised when a 3D job exceeds SKETCHDIY_3D_TIMEOUT."""
+
+
+def _job_timeout() -> float:
+    raw = os.environ.get("SKETCHDIY_3D_TIMEOUT")
+    if not raw:
+        return _DEFAULT_TIMEOUT_SECS
+    try:
+        return max(1.0, float(raw))
+    except (TypeError, ValueError):
+        return _DEFAULT_TIMEOUT_SECS
+
+
+def shutdown():
+    """Shut the process pool down, releasing the Open Cascade kernel loaded in
+    each worker. Safe to call multiple times and from atexit; clears the cached
+    executor so a later job recreates it if the process keeps running.
+    """
+    global _executor
+    ex = _executor
+    if ex and ex is not False:
+        try:
+            ex.shutdown(wait=False, cancel_futures=True)
+        except Exception:  # noqa: BLE001 - best-effort teardown
+            pass
+    _executor = None
+
+
+# Release worker processes (each holds a heavy Open Cascade kernel) on exit so
+# they aren't orphaned across dev reloads or an unclean shutdown.
+atexit.register(shutdown)
 
 
 def _make_executor() -> ProcessPoolExecutor:
@@ -67,17 +106,29 @@ async def run(func, *args, timeout: float | None = None):
     `func` and its `args` must be picklable (plain functions in `core.part3d`
     plus dict/list/primitive data — which is exactly what the 3D endpoints pass).
 
+    The job is bounded by `timeout` (defaults to SKETCHDIY_3D_TIMEOUT, 120s). A
+    timed-out job raises `JobTimeoutError` — it is *not* retried in-thread, since
+    the same kernel op would just hang the event-loop thread too.
+
     Validation errors raised by the worker (ValueError) propagate unchanged so the
     endpoint can map them to HTTP 400. Any worker/death/pickling failure routes to
     an in-process thread so the request still completes.
     """
+    if timeout is None:
+        timeout = _job_timeout()
     loop = asyncio.get_running_loop()
     ex = get_executor()
     if ex is None:
-        return await asyncio.to_thread(func, *args)
+        # Thread fallback (multiprocessing unavailable). Still bound by timeout.
+        return await asyncio.wait_for(asyncio.to_thread(func, *args), timeout)
     try:
         fut = ex.submit(func, *args)
         return await asyncio.wait_for(asyncio.wrap_future(fut), timeout)
+    except asyncio.TimeoutError:
+        # Don't retry a timed-out kernel op (it would just hang the thread too).
+        raise JobTimeoutError(
+            f"3D job exceeded the {timeout:.0f}s timeout (SKETCHDIY_3D_TIMEOUT)"
+        ) from None
     except ValueError:
         # user-facing validation error from part3d: re-raise, no retry
         raise
@@ -85,4 +136,4 @@ async def run(func, *args, timeout: float | None = None):
         # Worker died or couldn't run the job: drop the pool and retry locally.
         global _executor
         _executor = None
-        return await asyncio.to_thread(func, *args)
+        return await asyncio.wait_for(asyncio.to_thread(func, *args), timeout)
