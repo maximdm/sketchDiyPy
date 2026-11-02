@@ -54,21 +54,24 @@ Open http://127.0.0.1:8000
 - **Export:** SVG (for Cricut/laser), PNG, and PDF (rendered with matplotlib),
   plus **DXF** (CAD/CNC, millimetres) and **G-code** (basic profiling, mm, with
   `feed`/`plunge`/`depth`/`safe` params) for makers.
-- **3D extrude (optional build123d):** turn the sketch — or just the selected
-  shapes — into a solid, either **extruded** (prism) or **revolved** (lathe). A
-  three.js WebGL viewer previews it (drag to orbit, scroll to zoom) and you can
-  download **STL** (always) or **STEP** (needs build123d). Holes in outlines are
-  detected and cut. When build123d is absent, meshes are still produced (a
-  prism/revolve approximation) and, if **trimesh** is installed, cleaned of
-  degenerate/duplicate faces before preview and STL export. The 2D→3D path reuses
-  the same cut-geometry extraction as the DXF/G-code exporters. For **Revolve**,
-  pick the spin axis (a vertical line in the sketch): enter its X in mm, or click
-  **Pick axis** and click the sketch — leave it blank for the auto axis. The
-  chosen axis is drawn in the 3D viewer as a red line so you can verify it. Heavy
-  geometry work runs in a **process-pool worker**
-  (`core/worker3d.py`), so Open Cascade crashes can't take down the server and
-  the event loop never blocks (with a thread fallback if multiprocessing is
-  unavailable).
+- **3D solid (optional build123d):** turn the sketch — or just the selected
+  shapes — into a solid, as an **extruded** prism, a **revolved** lathe, or a
+  **sweep** along a path. A three.js WebGL viewer previews it (drag to orbit,
+  scroll to zoom, **Reset view** re-fits the camera) and you can download **STL**
+  (always) or **STEP** (needs build123d). Holes in outlines are detected and cut.
+  When build123d is absent, meshes are still produced (a prism/revolve
+  approximation) and, if **trimesh** is installed, cleaned of degenerate/duplicate
+  faces before preview and STL export. The 2D→3D path reuses the same cut-geometry
+  extraction as the DXF/G-code exporters. For **Revolve**, pick the spin axis (a
+  vertical line in the sketch): enter its X in mm, or click **Pick axis** and click
+  the sketch — leave it blank for the auto axis. The chosen axis is drawn in the
+  3D viewer as a red line so you can verify it. For **Sweep**, select a closed
+  profile plus an open path (a line/path shape); the profile is swept along the
+  path into a solid. A **Quality** selector controls the tessellation resolution
+  (Low / Medium / High) to trade preview smoothness against speed. Heavy geometry
+  work runs in a **process-pool worker** (`core/worker3d.py`), so Open Cascade
+  crashes can't take down the server and the event loop never blocks (with a thread
+  fallback if multiprocessing is unavailable).
 - **Persistence:** work **auto-saves to the browser** (survives reload), named
   **projects** save/load/delete on the server with a recent-files list, and
   **undo/redo** via `Ctrl/Cmd+Z` / `Ctrl/Cmd+Shift+Z`.

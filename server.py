@@ -258,6 +258,9 @@ async def build_3d(payload: dict):
     """
     ids = payload.get("ids") or None
     op = (payload.get("op") or "extrude").lower()
+    if op not in ("extrude", "revolve", "sweep"):
+        raise HTTPException(400, "op must be 'extrude', 'revolve' or 'sweep'")
+    quality = payload.get("quality", "medium")
     try:
         depth = float(payload.get("depth", 10.0))
         angle = float(payload.get("angle", 360.0))
@@ -272,7 +275,7 @@ async def build_3d(payload: dict):
     if op == "revolve":
         if angle <= 0 or angle > 360:
             raise HTTPException(400, "angle must be 0 < angle <= 360")
-    else:
+    elif op == "extrude":
         if depth <= 0:
             raise HTTPException(400, "depth must be > 0")
     try:
@@ -282,11 +285,15 @@ async def build_3d(payload: dict):
     try:
         if op == "revolve":
             mesh = await worker3d.run(
-                part3d.revolve_to_mesh, doc.to_dict(), objs, angle, axis, True
+                part3d.revolve_to_mesh, doc.to_dict(), objs, angle, axis, True, quality
+            )
+        elif op == "sweep":
+            mesh = await worker3d.run(
+                part3d.sweep_to_mesh, doc.to_dict(), objs, True, quality
             )
         else:
             mesh = await worker3d.run(
-                part3d.extrude_to_mesh, doc.to_dict(), objs, depth, True
+                part3d.extrude_to_mesh, doc.to_dict(), objs, depth, True, quality
             )
     except worker3d.JobTimeoutError as e:
         raise HTTPException(504, str(e)) from e
@@ -313,6 +320,9 @@ async def export_3d(payload: dict):
     op = (payload.get("op") or "extrude").lower()
     if fmt not in ("stl", "step"):
         raise HTTPException(400, "format must be 'stl' or 'step'")
+    if op not in ("extrude", "revolve", "sweep"):
+        raise HTTPException(400, "op must be 'extrude', 'revolve' or 'sweep'")
+    quality = payload.get("quality", "medium")
     try:
         depth = float(payload.get("depth", 10.0))
         angle = float(payload.get("angle", 360.0))
@@ -327,9 +337,12 @@ async def export_3d(payload: dict):
     if op == "revolve":
         if angle <= 0 or angle > 360:
             raise HTTPException(400, "angle must be 0 < angle <= 360")
-    else:
+    elif op == "extrude":
         if depth <= 0:
             raise HTTPException(400, "depth must be > 0")
+    if op == "sweep" and fmt == "step":
+        # Sweep solids are fine to export as STEP too; nothing special to guard.
+        pass
 
     try:
         objs = _objects_for_ids(ids)
@@ -337,7 +350,14 @@ async def export_3d(payload: dict):
         raise
     respect = objs is None
     outlines = part3d.doc_cut_outlines_mm(doc, objs, respect_visibility=respect)
-    if not any(o["closed"] and len(o["pts"]) >= 3 for o in outlines):
+    if op == "sweep":
+        if not any(o["closed"] and len(o["pts"]) >= 3 for o in outlines):
+            raise HTTPException(400, "sweep needs a closed profile")
+        if not any(not o.get("closed") and len(o.get("pts", [])) >= 2 for o in outlines):
+            raise HTTPException(
+                400, "sweep needs an open path (a line/path), not just a closed shape"
+            )
+    elif not any(o["closed"] and len(o["pts"]) >= 3 for o in outlines):
         raise HTTPException(400, "select at least one closed shape to extrude/revolve")
 
     suffix = "stl" if fmt == "stl" else "step"
@@ -351,7 +371,7 @@ async def export_3d(payload: dict):
         # off the event loop and a crash is contained to that process. The worker
         # also handles the pure-Python prism STL fallback when build123d is absent.
         await worker3d.run(
-            part3d.export_solid, outlines, op, depth, angle, fmt, str(path), axis
+            part3d.export_solid, outlines, op, depth, angle, fmt, str(path), axis, quality
         )
     except worker3d.JobTimeoutError as e:
         path.unlink(missing_ok=True)

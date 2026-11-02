@@ -12,7 +12,7 @@ import tempfile
 import pytest
 
 from core import part3d
-from core.document import Document, circle, line, rect
+from core.document import Document, circle, line, path, rect
 
 
 # --- helpers ---------------------------------------------------------------
@@ -173,6 +173,78 @@ def test_revolve_to_mesh_accurate_from_doc():
     assert mesh["op"] == "revolve"
     assert mesh["accurate"] is True
     assert mesh["triangles"] > 0
+
+
+@pytest.mark.skipif(not build123d_present, reason="build123d not installed")
+def test_revolve_to_mesh_returns_effective_auto_axis():
+    doc = _scene()
+    # No explicit axis => the backend default (min profile X - 1e-3) is computed
+    # and returned so the viewer can draw it.
+    mesh = part3d.revolve_to_mesh(doc, None, 360, None, True, "medium")
+    assert mesh["axis"] is not None
+    assert mesh["quality"] == "medium"
+
+
+def test_revolve_surface_mesh_uses_quality_segment_count():
+    # Higher quality -> more swept segments -> more triangles for the fallback.
+    outlines = [{"pts": [(0, 0), (20, 0), (20, 40), (0, 40)], "closed": True}]
+    _, lo = part3d._revolve_surface_mesh(outlines, 360, 0, 12)
+    _, hi = part3d._revolve_surface_mesh(outlines, 360, 0, 96)
+    assert len(hi) > len(lo)
+
+
+def test_quality_params_mapping():
+    assert part3d._quality_params("low") == (0.4, 12)
+    assert part3d._quality_params("medium") == (0.15, 48)
+    assert part3d._quality_params("high") == (0.04, 96)
+    # unknown values fall back to medium
+    assert part3d._quality_params("bogus") == (0.15, 48)
+
+
+def _sweep_scene():
+    """A closed profile (rect) plus an open path (the sweep rail)."""
+    doc = Document()
+    doc.add(rect(300, 250, 200, 120))
+    doc.add(path(0, 0, "M0,0 L80,0 L80,120 L200,120", stroke="#000"))
+    return doc
+
+
+@pytest.mark.skipif(not build123d_present, reason="build123d not installed")
+def test_solid_from_sweep_volume_sane():
+    # Square 200x120 px profile (~52.9 x 31.7 mm) swept along an L-path. The bulk
+    # of the volume tracks the swept length; we assert it's a positive solid body
+    # (degeneracy would yield ~0).
+    outlines = [
+        {"pts": [(0, 0), (10, 0), (10, 10), (0, 10)], "closed": True},
+        {"pts": [(0, 0), (20, 0), (20, 30), (40, 30)], "closed": False},
+    ]
+    solid = part3d.solid_from_sweep(outlines, None, "medium")
+    assert solid.volume > 1000  # well-formed swept body, not degenerate
+
+
+@pytest.mark.skipif(not build123d_present, reason="build123d not installed")
+def test_sweep_to_mesh_from_doc():
+    doc = _sweep_scene()
+    mesh = part3d.sweep_to_mesh(doc, None, True, "high")
+    assert mesh["op"] == "sweep"
+    assert mesh["quality"] == "high"
+    assert mesh["triangles"] > 0
+
+
+def test_sweep_to_mesh_rejects_profile_only():
+    # No open path -> clear error rather than a degenerate solid.
+    doc = Document()
+    doc.add(rect(300, 250, 200, 120))
+    with pytest.raises(ValueError):
+        part3d.sweep_to_mesh(doc, None, False)
+
+
+def test_sweep_to_mesh_rejects_path_only():
+    # No closed profile -> clear error.
+    doc = Document()
+    doc.add(path(0, 0, "M0,0 L80,0 L80,120", stroke="#000"))
+    with pytest.raises(ValueError):
+        part3d.sweep_to_mesh(doc, None, False)
 
 
 # --- trimesh mesh sanitation (fallback path) ---------------------------------

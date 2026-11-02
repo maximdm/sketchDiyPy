@@ -7,6 +7,7 @@ import httpx
 import pytest
 import server
 from core import part3d
+from core.document import Document, path, rect
 
 # STEP and Revolve export require the Open Cascade kernel (build123d). The base CI
 # job runs without it, so those export tests are skipped there; the accurate path
@@ -135,6 +136,61 @@ def test_3d_build_returns_build123d_flag():
     j = r.json()
     assert "build123d" in j
     assert j["build123d"] is part3d.available()
+
+
+def test_3d_build_quality_is_echoed():
+    c = client(server.app)
+    r = c.post("/api/3d/extrude", json={"depth": 10, "quality": "low"})
+    assert r.status_code == 200
+    j = r.json()
+    assert j.get("quality") == "low"
+
+
+def test_3d_build_revolve_returns_auto_axis():
+    c = client(server.app)
+    # No explicit axis => the effective (auto) axis is computed and returned so the
+    # viewer can draw it even for an un-set axis.
+    r = c.post("/api/3d/extrude", json={"op": "revolve", "angle": 360})
+    assert r.status_code == 200
+    j = r.json()
+    assert j["axis"] is not None
+
+
+def test_3d_build_sweep_requires_an_open_path():
+    c = client(server.app)
+    # Swap in a doc with a closed profile but NO open path: a clear 400 either way
+    # (ValueError "needs an open path" with build123d, or the build123d-missing msg).
+    saved = server.doc
+    try:
+        server.doc = Document()
+        server.doc.add(rect(300, 250, 200, 120))
+        r = c.post("/api/3d/extrude", json={"op": "sweep"})
+        assert r.status_code == 400
+    finally:
+        server.doc = saved
+
+
+@pytest.mark.skipif(not build123d_present, reason="build123d not installed")
+def test_3d_build_and_export_sweep():
+    c = client(server.app)
+    # Swap in a doc that has a closed profile + an open path, then sweep it.
+    saved = server.doc
+    try:
+        server.doc = Document()
+        server.doc.add(rect(300, 250, 200, 120))
+        server.doc.add(path(0, 0, "M0,0 L80,0 L80,120 L200,120", stroke="#000"))
+        r = c.post("/api/3d/extrude", json={"op": "sweep", "quality": "medium"})
+        assert r.status_code == 200
+        j = r.json()
+        assert j["op"] == "sweep"
+        assert j["triangles"] > 0
+
+        e = c.post("/api/3d/export",
+                   json={"op": "sweep", "format": "stl", "quality": "medium"})
+        assert e.status_code == 200
+        assert len(e.content) > 0
+    finally:
+        server.doc = saved
 
 
 def test_worker_offloads_to_process_pool():

@@ -293,6 +293,87 @@ def solid_from_outlines(outlines, depth):
     return solid
 
 
+def _quality_params(quality="medium"):
+    """Map a quality name to (tessellation tolerance mm, path segments)."""
+    q = (quality or "medium").lower()
+    if q == "low":
+        return 0.4, 12
+    if q == "high":
+        return 0.04, 96
+    return 0.15, 48  # medium
+
+
+def _first_open_path(outlines):
+    """Return the points of the first open (non-closed) outline, or None."""
+    for o in outlines:
+        if not o.get("closed") and len(o.get("pts", [])) >= 2:
+            return o["pts"]
+    return None
+
+
+def solid_from_sweep(outlines, path_pts=None, quality="medium"):
+    """Sweep the closed profiles along an open path (a curve) to make a solid.
+
+    `outlines` is the same sketch outline list used everywhere else; it must
+    contain at least one closed profile and (unless `path_pts` is given) exactly
+    one open path, which becomes the sweep rail. build123d's `sweep` aligns the
+    profile normal with the path tangent, which is degenerate for in-plane (2D)
+    paths; to get a correct cross-section we rotate only the *path* so its start
+    tangent points along +Z (the profile's normal), sweep, then rotate the
+    resulting solid back. Profiles and path are in mm, XY plane. Requires
+    build123d; there is no pure-Python fallback.
+    """
+    if not available():
+        raise RuntimeError("build123d is not installed")
+    import build123d
+    from build123d import BuildPart, sweep, Edge, Vector, Axis
+
+    profiles = list(_build_faces(build123d, _classify(_closed_outlines(outlines))))
+    if not profiles:
+        raise ValueError("no closed profile to sweep")
+    if path_pts is None:
+        path_pts = _first_open_path(outlines)
+    if not path_pts or len(path_pts) < 2:
+        raise ValueError(
+            "sweep needs an open path (a non-closed sketch line/path) of 2+ points"
+        )
+    pts = [Vector(p[0], p[1], 0.0) for p in path_pts]
+    if len(pts) >= 3:
+        path = Edge.make_spline(pts)
+    else:
+        path = Edge.make_line(pts[0], pts[1])
+
+    def rot_a_to_b(a, b):
+        a = a.normalized(); b = b.normalized()
+        cr = a.cross(b)
+        if cr.length < 1e-9:
+            return (Axis(Vector(0, 0, 0), Vector(0, 0, 1)),
+                    0.0 if a.dot(b) > 0 else 180.0)
+        cr = cr.normalized()
+        angle = math.degrees(math.acos(max(-1.0, min(1.0, a.dot(b)))))
+        return (Axis(Vector(0, 0, 0), Vector(cr.X, cr.Y, cr.Z)), angle)
+
+    start_t = path.tangent_at(0.0)
+    rax, rang = rot_a_to_b(start_t, Vector(0, 0, 1))
+    raxI, rangI = rot_a_to_b(Vector(0, 0, 1), start_t)
+    pathR = path.rotate(rax, rang)
+
+    parts = []
+    for face in profiles:
+        try:
+            with BuildPart() as bp:
+                sweep(face, pathR)
+            parts.append(bp.part.rotate(raxI, rangI))
+        except Exception:
+            continue
+    if not parts:
+        raise ValueError("could not sweep the profile along the path")
+    solid = parts[0]
+    for s in parts[1:]:
+        solid = solid + s
+    return solid
+
+
 def solid_from_revolution(outlines, angle_deg=360.0, axis_x=None):
     """Build a solid of revolution by spinning closed outlines about the model's
     Y (vertical) axis. `axis_x` is the axis position along X; defaults to the
@@ -352,7 +433,8 @@ def write_step(solid, path):
     build123d.export_step(solid, path)
 
 
-def build_solid(outlines, op="extrude", depth=10.0, angle_deg=360.0, axis_x=None):
+def build_solid(outlines, op="extrude", depth=10.0, angle_deg=360.0, axis_x=None,
+                quality="medium"):
     """Build a solid (Part) from mm outlines for the given operation.
 
     Returns a build123d Part, or raises ValueError/RuntimeError. Pure-Python
@@ -361,16 +443,19 @@ def build_solid(outlines, op="extrude", depth=10.0, angle_deg=360.0, axis_x=None
     """
     if op == "revolve":
         return solid_from_revolution(outlines, angle_deg, axis_x)
+    if op == "sweep":
+        return solid_from_sweep(outlines, None, quality)
     return solid_from_outlines(outlines, depth)
 
 
-def export_solid(outlines, op, depth, angle_deg, fmt, path, axis_x=None):
+def export_solid(outlines, op, depth, angle_deg, fmt, path, axis_x=None,
+                 quality="medium"):
     """Build the solid and write it to `path` as STL or STEP.
 
     Intended to run *inside* the process-pool worker so the Open Cascade work
     never blocks the server. When build123d is missing it falls back to a simple
-    prism STL (extrude only); STEP and Revolve require build123d and raise a
-    RuntimeError that the server maps to HTTP 400.
+    prism STL (extrude only); STEP, Revolve and Sweep require build123d and raise
+    a RuntimeError that the server maps to HTTP 400.
     """
     if not available():
         if fmt == "step":
@@ -381,13 +466,17 @@ def export_solid(outlines, op, depth, angle_deg, fmt, path, axis_x=None):
             raise RuntimeError(
                 "Revolve needs build123d (pip install build123d)"
             )
+        if op == "sweep":
+            raise RuntimeError(
+                "Sweep needs build123d (pip install build123d)"
+            )
         # Pure-Python fallback: a simple prism mesh written as ASCII STL.
         positions, indices = _prism_mesh(outlines, depth)
         positions, indices, _ = sanitize_mesh(positions, indices)
         write_stl_ascii(positions, indices, path)
         return
 
-    solid = build_solid(outlines, op, depth, angle_deg, axis_x)
+    solid = build_solid(outlines, op, depth, angle_deg, axis_x, quality)
     if fmt == "step":
         write_step(solid, path)
     else:
@@ -407,12 +496,13 @@ def _bbox(positions):
     return {"min": mn, "max": mx, "size": [mx[i] - mn[i] for i in range(3)]}
 
 
-def extrude_to_mesh(doc, objects=None, depth=10.0, accurate=True):
+def extrude_to_mesh(doc, objects=None, depth=10.0, accurate=True, quality="medium"):
     """Return a preview mesh dict for the doc/selection.
 
     Uses build123d tessellation when available (accurate curved surfaces);
     otherwise falls back to a simple prism mesh. Always returns a mesh so the
-    UI can preview even without build123d installed.
+    UI can preview even without build123d installed. `quality` controls the
+    tessellation tolerance ("low"/"medium"/"high").
     """
     respect = objects is None
     outlines = doc_cut_outlines_mm(doc, objects, respect_visibility=respect)
@@ -422,11 +512,12 @@ def extrude_to_mesh(doc, objects=None, depth=10.0, accurate=True):
             "closed path)."
         )
 
+    tol, _ = _quality_params(quality)
     repair = None
     if accurate and available():
         try:
             solid = solid_from_outlines(outlines, depth)
-            positions, indices = tessellate_solid(solid)
+            positions, indices = tessellate_solid(solid, tol)
             used_accurate = True
         except Exception:
             positions, indices = _prism_mesh(outlines, depth)
@@ -445,6 +536,7 @@ def extrude_to_mesh(doc, objects=None, depth=10.0, accurate=True):
         "triangles": len(indices) // 3,
         "depth": depth,
         "op": "extrude",
+        "quality": quality,
         "build123d": available(),
         "trimesh": bool(repair and repair["available"]),
         "repaired": repair["removed"] if repair else 0,
@@ -504,11 +596,14 @@ def _revolve_surface_mesh(outlines, angle_deg=360.0, axis_x=None, segments=48):
     return positions, indices
 
 
-def revolve_to_mesh(doc, objects=None, angle_deg=360.0, axis_x=None, accurate=True):
+def revolve_to_mesh(doc, objects=None, angle_deg=360.0, axis_x=None, accurate=True,
+                    quality="medium"):
     """Return a preview mesh dict for revolving the doc/selection (op="revolve").
 
     Uses build123d when available (accurate surface), otherwise falls back to a
-    surface-of-revolution approximation.
+    surface-of-revolution approximation. When `axis_x` is None the effective
+    auto axis (min profile X − 1e-3, the value the kernel actually uses) is
+    computed and returned in the result so the viewer can draw it.
     """
     respect = objects is None
     outlines = doc_cut_outlines_mm(doc, objects, respect_visibility=respect)
@@ -516,18 +611,27 @@ def revolve_to_mesh(doc, objects=None, angle_deg=360.0, axis_x=None, accurate=Tr
     if not closed:
         raise ValueError("select a closed profile to revolve")
 
+    # Compute the effective axis the kernel will use, so the viewer can draw it
+    # even for an "auto" axis the user didn't specify explicitly.
+    effective_axis = axis_x
+    if effective_axis is None:
+        closed_pts = _closed_outlines(outlines)
+        if closed_pts:
+            effective_axis = min(p[0] for poly in closed_pts for p in poly) - 1e-3
+
+    tol, segs = _quality_params(quality)
     repair = None
     if accurate and available():
         try:
             solid = solid_from_revolution(outlines, angle_deg, axis_x)
-            positions, indices = tessellate_solid(solid)
+            positions, indices = tessellate_solid(solid, tol)
             used_accurate = True
         except Exception:
-            positions, indices = _revolve_surface_mesh(outlines, angle_deg, axis_x, 48)
+            positions, indices = _revolve_surface_mesh(outlines, angle_deg, axis_x, segs)
             positions, indices, repair = sanitize_mesh(positions, indices)
             used_accurate = False
     else:
-        positions, indices = _revolve_surface_mesh(outlines, angle_deg, axis_x, 48)
+        positions, indices = _revolve_surface_mesh(outlines, angle_deg, axis_x, segs)
         positions, indices, repair = sanitize_mesh(positions, indices)
         used_accurate = False
 
@@ -538,12 +642,65 @@ def revolve_to_mesh(doc, objects=None, angle_deg=360.0, axis_x=None, accurate=Tr
         "accurate": used_accurate,
         "triangles": len(indices) // 3,
         # `angle` is the revolution sweep; `axis` is the spin-axis X (mm) actually
-        # used (None => backend default). `depth` is kept only for the extrude op.
+        # used: the explicit value when given, otherwise the computed auto axis.
         "angle": angle_deg,
-        "axis": axis_x,
+        "axis": effective_axis,
         "op": "revolve",
+        "quality": quality,
         "build123d": available(),
         "trimesh": bool(repair and repair["available"]),
         "repaired": repair["removed"] if repair else 0,
         "watertight": repair["watertight"] if repair else None,
+    }
+
+
+def sweep_to_mesh(doc, objects=None, accurate=True, quality="medium"):
+    """Return a preview mesh dict for sweeping the doc/selection (op="sweep").
+
+    The selection must contain a closed profile plus an open path (the rail).
+    Builds a build123d solid and tessellates it — there is no pure-Python
+    fallback, so a clear error is returned when build123d is absent or the
+    selection is incomplete.
+    """
+    respect = objects is None
+    outlines = doc_cut_outlines_mm(doc, objects, respect_visibility=respect)
+    closed = [o for o in outlines if o["closed"] and len(o["pts"]) >= 3]
+    path = _first_open_path(outlines)
+    if not closed:
+        raise ValueError(
+            "Sweep needs a closed profile to sweep (a rect, circle, or closed path)."
+        )
+    if not path or len(path) < 2:
+        raise ValueError(
+            "Sweep needs an open path (a line/path), not just a closed shape."
+        )
+    if not available():
+        raise RuntimeError("Sweep needs build123d (pip install build123d)")
+
+    tol, _ = _quality_params(quality)
+    try:
+        solid = solid_from_sweep(outlines, None, quality)
+    except ValueError:
+        raise
+    except Exception as e:  # noqa: BLE001 - Open Cascade / sweep failures
+        raise ValueError(f"sweep failed: {e}") from e
+
+    try:
+        positions, indices = tessellate_solid(solid, tol)
+        used_accurate = True
+    except Exception:  # noqa: BLE001 - should not normally happen post-success
+        raise ValueError("could not tessellate the swept solid")
+
+    return {
+        "positions": positions,
+        "indices": indices,
+        "bbox": _bbox(positions),
+        "accurate": used_accurate,
+        "triangles": len(indices) // 3,
+        "op": "sweep",
+        "quality": quality,
+        "build123d": available(),
+        "trimesh": False,
+        "repaired": 0,
+        "watertight": None,
     }

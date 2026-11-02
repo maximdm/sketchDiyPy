@@ -363,17 +363,20 @@
       </div>
 
       <div class="card">
-        <h3>3D Extrude <small>(build123d)</small></h3>
+        <h3>3D Solid <small>(build123d)</small></h3>
         <p class="hint">Turn the sketch into a solid. Select shapes first and use
-          <em>Extrude selection</em>, or <em>Extrude all</em> for the whole page.
+          <em>Build selection</em>, or <em>Build all</em> for the whole page.
           Drag to rotate, scroll to zoom. STEP export needs build123d installed.
           For <em>Revolve</em>, set the spin axis (a vertical line in the sketch):
-          enter its X in mm, or click <em>Pick axis</em> and click the sketch.</p>
+          enter its X in mm, or click <em>Pick axis</em> and click the sketch.
+          For <em>Sweep</em>, select a closed profile plus an open path (a line or
+          path shape) — the profile is swept along the path into a solid.</p>
         <div class="tpl-params">
           <label>Operation
             <select id="d3op" class="field">
               <option value="extrude">Extrude</option>
               <option value="revolve">Revolve (lathe)</option>
+              <option value="sweep">Sweep (path)</option>
             </select>
           </label>
           <label id="d3depthWrap">Thickness (mm)
@@ -387,15 +390,25 @@
           </label>
           <button id="d3pick" class="btn" type="button" hidden
             title="Click on the sketch to place the revolve axis">↕ Pick axis</button>
+          <label id="d3qualityWrap">Quality
+            <select id="d3quality" class="field">
+              <option value="low">Low</option>
+              <option value="medium" selected>Medium</option>
+              <option value="high">High</option>
+            </select>
+          </label>
         </div>
+        <p id="d3sweepHint" class="hint" hidden>Sweep needs a <em>closed profile</em>
+          plus an <em>open path</em> (a line or path shape). Select both, then build.</p>
         <canvas id="d3canvas" class="d3-canvas" width="320" height="240"></canvas>
         <div class="console-actions">
           <label class="check-label"><input type="checkbox" id="d3wire" /> Wireframe</label>
           <label class="check-label"><input type="checkbox" id="d3grid" checked /> Grid + axes</label>
         </div>
         <div class="console-actions">
-          <button id="d3ExtrudeSel" class="btn">⬗ Extrude selection</button>
-          <button id="d3ExtrudeAll" class="btn btn-primary">⬗ Extrude all</button>
+          <button id="d3ExtrudeSel" class="btn">⬗ Build selection</button>
+          <button id="d3ExtrudeAll" class="btn btn-primary">⬗ Build all</button>
+          <button id="d3reset" class="btn" type="button" title="Re-fit the camera to the model">⤢ Reset view</button>
         </div>
         <div class="console-actions">
           <button id="d3stl" class="xbtn" disabled>⬇ STL</button>

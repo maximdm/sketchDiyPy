@@ -36,6 +36,7 @@ let lastOp = "extrude";
 let lastDepth = 10;
 let lastAngle = 360;
 let lastAxis = null;    // revolve axis X in mm (null => backend default)
+let lastQuality = "medium";
 let pickMode = false;   // true while waiting for a canvas click to set the axis
 
 // three.js scene
@@ -57,6 +58,9 @@ function angleVal() {
 function axisVal() {
   const v = parseFloat($("d3axis").value);
   return Number.isFinite(v) ? v : null;
+}
+function qualityVal() {
+  return ($("d3quality").value || "medium").toLowerCase();
 }
 
 // --------------------------------------------------------------------------
@@ -195,14 +199,20 @@ function showMesh(data) {
 
 // Draw the Revolve spin axis (a vertical line in the sketch at axis X) so the
 // picker result is visible. Added as a child of meshObj so it inherits the same
-// rotation/centring transform. Only shown when the user explicitly set an axis.
+// rotation/centring transform. Shown when the user explicitly set an axis, or
+// (for "auto") when the server returned the effective axis it used.
 function updateAxis(data) {
   if (axisObj) {
     axisObj.geometry.dispose();
     axisObj.material.dispose();
     axisObj = null;
   }
-  if (data.op !== "revolve" || lastAxis === null || !meshObj) return;
+  if (data.op !== "revolve" || !meshObj) return;
+  // Prefer the explicit user axis; otherwise fall back to the server-computed
+  // auto axis (min profile X − 1e-3) so even an un-set axis is visualised.
+  const ax = lastAxis !== null ? lastAxis
+           : (data.axis === undefined || data.axis === null ? null : data.axis);
+  if (ax === null) return;
   const b = data.bbox;
   const minY = b.min[1], maxY = b.max[1];
   const h = Math.max(1e-3, maxY - minY);
@@ -213,7 +223,7 @@ function updateAxis(data) {
   const geom = new THREE.CylinderGeometry(r, r, h, 8);
   const mat = new THREE.MeshBasicMaterial({ color: 0xff5a3c });
   axisObj = new THREE.Mesh(geom, mat);
-  axisObj.position.set(lastAxis, (minY + maxY) / 2, 0);
+  axisObj.position.set(ax, (minY + maxY) / 2, 0);
   meshObj.add(axisObj);
 }
 
@@ -245,16 +255,20 @@ async function doBuild(useSelection) {
   lastDepth = depthVal();
   lastAngle = angleVal();
   lastAxis = axisVal();
+  lastQuality = qualityVal();
   setBusy(true, "Building…");
   try {
     mesh = await api("POST", "/api/3d/extrude", {
       ids, op, depth: lastDepth, angle: lastAngle, axis: lastAxis,
+      quality: lastQuality,
     });
     showMesh(mesh);
     const b = mesh.bbox.size;
     const approx = mesh.accurate ? "" : " · preview approximation (install build123d for exact solids)";
     const bd = mesh.build123d ? "build123d active" : "build123d not installed";
-    const what = op === "revolve" ? `${lastAngle}° revolution` : `${lastDepth} mm thick`;
+    const what = op === "revolve" ? `${lastAngle}° revolution`
+               : op === "sweep" ? "swept along path"
+               : `${lastDepth} mm thick`;
     const axisNote = op === "revolve"
       ? (lastAxis === null ? " · axis auto" : ` · axis ${lastAxis.toFixed(1)} mm`)
       : "";
@@ -284,7 +298,7 @@ async function download(format) {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         ids: lastIds, op: lastOp, depth: lastDepth, angle: lastAngle,
-        axis: lastAxis, format,
+        axis: lastAxis, quality: lastQuality, format,
       }),
     });
     if (!res.ok) {
@@ -313,12 +327,18 @@ export function initThreeD() {
   $("d3ExtrudeAll").addEventListener("click", () => doBuild(false));
   $("d3stl").addEventListener("click", () => download("stl"));
   $("d3step").addEventListener("click", () => download("step"));
+  $("d3reset").addEventListener("click", () => {
+    if (mesh) { frameModel(mesh.bbox); render(); }
+  });
   $("d3op").addEventListener("change", () => {
-    const isRev = opVal() === "revolve";
-    $("d3depthWrap").hidden = isRev;
+    const op = opVal();
+    const isRev = op === "revolve";
+    const isSweep = op === "sweep";
+    $("d3depthWrap").hidden = isRev || isSweep;
     $("d3angleWrap").hidden = !isRev;
     $("d3axisWrap").hidden = !isRev;
     $("d3pick").hidden = !isRev;
+    $("d3sweepHint").hidden = !isSweep;
     if (!isRev && pickMode) setPickMode(false);
   });
   $("d3pick").addEventListener("click", () => {
