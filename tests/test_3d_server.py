@@ -70,6 +70,9 @@ def test_3d_build_revolve():
     j = r.json()
     assert j["op"] == "revolve"
     assert j["triangles"] > 0
+    # Revolve meshes report the sweep angle and the axis that was used.
+    assert j["angle"] == 360
+    assert "axis" in j
 
 
 def test_3d_build_rejects_bad_angle():
@@ -85,6 +88,7 @@ def test_3d_build_revolve_accepts_axis():
     j = r.json()
     assert j["op"] == "revolve"
     assert j["triangles"] > 0
+    assert j["axis"] == 100
 
 
 def test_3d_build_rejects_bad_axis():

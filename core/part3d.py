@@ -537,7 +537,10 @@ def revolve_to_mesh(doc, objects=None, angle_deg=360.0, axis_x=None, accurate=Tr
         "bbox": _bbox(positions),
         "accurate": used_accurate,
         "triangles": len(indices) // 3,
-        "depth": angle_deg,
+        # `angle` is the revolution sweep; `axis` is the spin-axis X (mm) actually
+        # used (None => backend default). `depth` is kept only for the extrude op.
+        "angle": angle_deg,
+        "axis": axis_x,
         "op": "revolve",
         "build123d": available(),
         "trimesh": bool(repair and repair["available"]),

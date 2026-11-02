@@ -40,7 +40,7 @@ let pickMode = false;   // true while waiting for a canvas click to set the axis
 
 // three.js scene
 let renderer = null, scene = null, camera = null, controls = null;
-let meshObj = null, axesObj = null, gridObj = null;
+let meshObj = null, axesObj = null, gridObj = null, axisObj = null;
 let viewerReady = false;
 
 function opVal() {
@@ -188,8 +188,33 @@ function showMesh(data) {
   meshObj.rotation.x = -Math.PI / 2;
   scene.add(meshObj);
 
+  updateAxis(data);
   frameModel(b);
   render();
+}
+
+// Draw the Revolve spin axis (a vertical line in the sketch at axis X) so the
+// picker result is visible. Added as a child of meshObj so it inherits the same
+// rotation/centring transform. Only shown when the user explicitly set an axis.
+function updateAxis(data) {
+  if (axisObj) {
+    axisObj.geometry.dispose();
+    axisObj.material.dispose();
+    axisObj = null;
+  }
+  if (data.op !== "revolve" || lastAxis === null || !meshObj) return;
+  const b = data.bbox;
+  const minY = b.min[1], maxY = b.max[1];
+  const h = Math.max(1e-3, maxY - minY);
+  const maxDim = Math.max(b.size[0], b.size[1], b.size[2]) || 1;
+  const r = Math.max(0.3, maxDim * 0.004);
+  // CylinderGeometry's axis is local Y, which matches the revolve (Y) axis and,
+  // after meshObj's -90° X rotation, appears vertical on screen.
+  const geom = new THREE.CylinderGeometry(r, r, h, 8);
+  const mat = new THREE.MeshBasicMaterial({ color: 0xff5a3c });
+  axisObj = new THREE.Mesh(geom, mat);
+  axisObj.position.set(lastAxis, (minY + maxY) / 2, 0);
+  meshObj.add(axisObj);
 }
 
 function render() {
@@ -242,6 +267,7 @@ async function doBuild(useSelection) {
       `${mesh.triangles} triangles · ${b[0].toFixed(1)}×${b[1].toFixed(1)}×${b[2].toFixed(1)} mm · ${what}${axisNote} · ${bd}${approx}${repairNote}`;
   } catch (err) {
     mesh = null;
+    if (axisObj) { axisObj.geometry.dispose(); axisObj.material.dispose(); axisObj = null; }
     if (meshObj) { scene.remove(meshObj); meshObj = null; }
     $("d3status").textContent = "Build failed: " + err.message;
     render();

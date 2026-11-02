@@ -30,6 +30,11 @@ venv\Scripts\python -m uvicorn server:app --reload
 
 Open http://127.0.0.1:8000
 
+> `--reload` runs the app under a reloader (handy for development). The 3D work
+> runs in a separate process pool; on reload the old workers are released via an
+> `atexit` hook, so brief worker processes during dev reloads are expected. For
+> production, drop `--reload`.
+
 > Install shortcuts (equivalent, via pyproject extras): `pip install .` (base),
 > `pip install .[3d]` (base + build123d + trimesh), `pip install .[test]` or
 > `pip install .[3d,test]` (adds pytest + Playwright).
@@ -58,7 +63,8 @@ Open http://127.0.0.1:8000
   degenerate/duplicate faces before preview and STL export. The 2D→3D path reuses
   the same cut-geometry extraction as the DXF/G-code exporters. For **Revolve**,
   pick the spin axis (a vertical line in the sketch): enter its X in mm, or click
-  **Pick axis** and click the sketch — leave it blank for the auto axis. Heavy
+  **Pick axis** and click the sketch — leave it blank for the auto axis. The
+  chosen axis is drawn in the 3D viewer as a red line so you can verify it. Heavy
   geometry work runs in a **process-pool worker**
   (`core/worker3d.py`), so Open Cascade crashes can't take down the server and
   the event loop never blocks (with a thread fallback if multiprocessing is
