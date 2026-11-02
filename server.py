@@ -263,6 +263,12 @@ async def build_3d(payload: dict):
         angle = float(payload.get("angle", 360.0))
     except (TypeError, ValueError):
         raise HTTPException(400, "depth/angle must be numbers")
+    axis = payload.get("axis", None)
+    if axis is not None:
+        try:
+            axis = float(axis)
+        except (TypeError, ValueError):
+            raise HTTPException(400, "axis must be a number (mm)")
     if op == "revolve":
         if angle <= 0 or angle > 360:
             raise HTTPException(400, "angle must be 0 < angle <= 360")
@@ -276,7 +282,7 @@ async def build_3d(payload: dict):
     try:
         if op == "revolve":
             mesh = await worker3d.run(
-                part3d.revolve_to_mesh, doc.to_dict(), objs, angle, None, True
+                part3d.revolve_to_mesh, doc.to_dict(), objs, angle, axis, True
             )
         else:
             mesh = await worker3d.run(
@@ -312,6 +318,12 @@ async def export_3d(payload: dict):
         angle = float(payload.get("angle", 360.0))
     except (TypeError, ValueError):
         raise HTTPException(400, "depth/angle must be numbers")
+    axis = payload.get("axis", None)
+    if axis is not None:
+        try:
+            axis = float(axis)
+        except (TypeError, ValueError):
+            raise HTTPException(400, "axis must be a number (mm)")
     if op == "revolve":
         if angle <= 0 or angle > 360:
             raise HTTPException(400, "angle must be 0 < angle <= 360")
@@ -339,7 +351,7 @@ async def export_3d(payload: dict):
         # off the event loop and a crash is contained to that process. The worker
         # also handles the pure-Python prism STL fallback when build123d is absent.
         await worker3d.run(
-            part3d.export_solid, outlines, op, depth, angle, fmt, str(path), None
+            part3d.export_solid, outlines, op, depth, angle, fmt, str(path), axis
         )
     except worker3d.JobTimeoutError as e:
         path.unlink(missing_ok=True)

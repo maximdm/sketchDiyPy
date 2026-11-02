@@ -1,5 +1,7 @@
 # sketchDiy
 
+[![CI](https://github.com/maximdm/sketchDiyPy/actions/workflows/ci.yml/badge.svg)](https://github.com/maximdm/sketchDiyPy/actions/workflows/ci.yml)
+
 A DIY-focused vector design tool — think CorelDRAW, but for makers. Draw and
 lay out projects in the browser, drive generation with Python, and export to the
 formats cutters, lasers, and printers actually use.
@@ -54,8 +56,10 @@ Open http://127.0.0.1:8000
   detected and cut. When build123d is absent, meshes are still produced (a
   prism/revolve approximation) and, if **trimesh** is installed, cleaned of
   degenerate/duplicate faces before preview and STL export. The 2D→3D path reuses
-  the same cut-geometry extraction as the DXF/G-code exporters. Heavy geometry work
-  runs in a **process-pool worker**
+  the same cut-geometry extraction as the DXF/G-code exporters. For **Revolve**,
+  pick the spin axis (a vertical line in the sketch): enter its X in mm, or click
+  **Pick axis** and click the sketch — leave it blank for the auto axis. Heavy
+  geometry work runs in a **process-pool worker**
   (`core/worker3d.py`), so Open Cascade crashes can't take down the server and
   the event loop never blocks (with a thread fallback if multiprocessing is
   unavailable).

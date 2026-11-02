@@ -40,6 +40,28 @@ def test_3d_build_rejects_bad_angle():
     assert r.status_code == 400
 
 
+def test_3d_build_revolve_accepts_axis():
+    c = TestClient(server.app)
+    r = c.post("/api/3d/extrude", json={"op": "revolve", "angle": 360, "axis": 100})
+    assert r.status_code == 200
+    j = r.json()
+    assert j["op"] == "revolve"
+    assert j["triangles"] > 0
+
+
+def test_3d_build_rejects_bad_axis():
+    c = TestClient(server.app)
+    r = c.post("/api/3d/extrude", json={"op": "revolve", "angle": 360, "axis": "abc"})
+    assert r.status_code == 400
+
+
+def test_3d_export_revolve_stl_accepts_axis():
+    c = TestClient(server.app)
+    r = c.post("/api/3d/export", json={"op": "revolve", "angle": 360, "axis": 50, "format": "stl"})
+    assert r.status_code == 200
+    assert len(r.content) > 0
+
+
 def test_3d_export_stl():
     c = TestClient(server.app)
     r = c.post("/api/3d/export", json={"depth": 10, "format": "stl"})

@@ -12,6 +12,7 @@
 import * as THREE from "three";
 import { OrbitControls } from "three/addons/controls/OrbitControls.js";
 import { canvas, $ } from "./state.js";
+import { pxPerUnit } from "./page.js";
 
 // --------------------------------------------------------------------------
 // Server helper (mirrors sync.js `api`)
@@ -34,6 +35,8 @@ let lastIds = null;     // ids used for the last build (null = whole doc)
 let lastOp = "extrude";
 let lastDepth = 10;
 let lastAngle = 360;
+let lastAxis = null;    // revolve axis X in mm (null => backend default)
+let pickMode = false;   // true while waiting for a canvas click to set the axis
 
 // three.js scene
 let renderer = null, scene = null, camera = null, controls = null;
@@ -50,6 +53,10 @@ function depthVal() {
 function angleVal() {
   const v = parseFloat($("d3angle").value);
   return Number.isFinite(v) ? Math.min(360, Math.max(1, v)) : 360;
+}
+function axisVal() {
+  const v = parseFloat($("d3axis").value);
+  return Number.isFinite(v) ? v : null;
 }
 
 // --------------------------------------------------------------------------
@@ -212,23 +219,27 @@ async function doBuild(useSelection) {
   lastOp = op;
   lastDepth = depthVal();
   lastAngle = angleVal();
+  lastAxis = axisVal();
   setBusy(true, "Building…");
   try {
     mesh = await api("POST", "/api/3d/extrude", {
-      ids, op, depth: lastDepth, angle: lastAngle,
+      ids, op, depth: lastDepth, angle: lastAngle, axis: lastAxis,
     });
     showMesh(mesh);
     const b = mesh.bbox.size;
     const approx = mesh.accurate ? "" : " · preview approximation (install build123d for exact solids)";
     const bd = mesh.build123d ? "build123d active" : "build123d not installed";
     const what = op === "revolve" ? `${lastAngle}° revolution` : `${lastDepth} mm thick`;
+    const axisNote = op === "revolve"
+      ? (lastAxis === null ? " · axis auto" : ` · axis ${lastAxis.toFixed(1)} mm`)
+      : "";
     let repairNote = "";
     if (mesh.trimesh && mesh.repaired > 0) {
       const wt = mesh.watertight ? " · watertight" : " · not watertight";
       repairNote = ` · trimesh cleaned ${mesh.repaired} face(s)${wt}`;
     }
     $("d3status").textContent =
-      `${mesh.triangles} triangles · ${b[0].toFixed(1)}×${b[1].toFixed(1)}×${b[2].toFixed(1)} mm · ${what} · ${bd}${approx}${repairNote}`;
+      `${mesh.triangles} triangles · ${b[0].toFixed(1)}×${b[1].toFixed(1)}×${b[2].toFixed(1)} mm · ${what}${axisNote} · ${bd}${approx}${repairNote}`;
   } catch (err) {
     mesh = null;
     if (meshObj) { scene.remove(meshObj); meshObj = null; }
@@ -246,7 +257,8 @@ async function download(format) {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
-        ids: lastIds, op: lastOp, depth: lastDepth, angle: lastAngle, format,
+        ids: lastIds, op: lastOp, depth: lastDepth, angle: lastAngle,
+        axis: lastAxis, format,
       }),
     });
     if (!res.ok) {
@@ -279,6 +291,22 @@ export function initThreeD() {
     const isRev = opVal() === "revolve";
     $("d3depthWrap").hidden = isRev;
     $("d3angleWrap").hidden = !isRev;
+    $("d3axisWrap").hidden = !isRev;
+    $("d3pick").hidden = !isRev;
+    if (!isRev && pickMode) setPickMode(false);
+  });
+  $("d3pick").addEventListener("click", () => {
+    if (pickMode) setPickMode(false);
+    else if (opVal() === "revolve") setPickMode(true);
+  });
+  // Click on the 2D sketch to place the revolve axis (vertical line) at that X.
+  canvas.on("mouse:down", (opt) => {
+    if (!pickMode) return;
+    const p = canvas.getPointer(opt.e);
+    const mm = p.x / pxPerUnit();
+    $("d3axis").value = mm.toFixed(2);
+    lastAxis = mm;
+    setPickMode(false);
   });
   $("d3wire").addEventListener("change", () => {
     if (meshObj) meshObj.material.wireframe = $("d3wire").checked;
@@ -293,6 +321,16 @@ export function initThreeD() {
   } catch (e) {
     // WebGL unavailable: still wire the buttons; just no preview.
     $("d3status").textContent = "3D preview unavailable (WebGL off)";
+  }
+}
+
+function setPickMode(on) {
+  pickMode = on;
+  $("d3pick").textContent = on ? "✕ Cancel pick" : "↕ Pick axis";
+  $("d3pick").classList.toggle("btn-primary", on);
+  if (on) {
+    $("d3status").textContent =
+      "Click on the sketch to set the revolve axis (a vertical line at that X)";
   }
 }
 
