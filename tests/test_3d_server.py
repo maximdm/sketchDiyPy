@@ -8,6 +8,11 @@ import pytest
 import server
 from core import part3d
 
+# STEP and Revolve export require the Open Cascade kernel (build123d). The base CI
+# job runs without it, so those export tests are skipped there; the accurate path
+# is still exercised by the dedicated test-3d CI job (which installs build123d).
+build123d_present = part3d.available()
+
 
 def client(app):
     """Sync ASGI test client built on httpx.
@@ -88,6 +93,7 @@ def test_3d_build_rejects_bad_axis():
     assert r.status_code == 400
 
 
+@pytest.mark.skipif(not build123d_present, reason="build123d not installed")
 def test_3d_export_revolve_stl_accepts_axis():
     c = client(server.app)
     r = c.post("/api/3d/export", json={"op": "revolve", "angle": 360, "axis": 50, "format": "stl"})
@@ -102,6 +108,7 @@ def test_3d_export_stl():
     assert len(r.content) > 0
 
 
+@pytest.mark.skipif(not build123d_present, reason="build123d not installed")
 def test_3d_export_step():
     c = client(server.app)
     r = c.post("/api/3d/export", json={"depth": 10, "format": "step"})
@@ -109,6 +116,7 @@ def test_3d_export_step():
     assert len(r.content) > 0
 
 
+@pytest.mark.skipif(not build123d_present, reason="build123d not installed")
 def test_3d_export_revolve_stl():
     c = client(server.app)
     r = c.post("/api/3d/export", json={"op": "revolve", "angle": 360, "format": "stl"})
