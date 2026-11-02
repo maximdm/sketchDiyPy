@@ -1,0 +1,415 @@
+"""FastAPI server for sketchDiy.
+
+Endpoints:
+  GET  /                 -> index.html
+  GET  /api/doc          -> current document (JSON)
+  POST /api/objects      -> add/replace an object (body = canonical object)
+  PUT  /api/objects/{id}-> replace object by id
+  DELETE /api/objects/{id}-> remove object by id
+  POST /api/clear        -> remove all objects
+  POST /api/run          -> run a Python snippet (Hybrid console)
+  POST /api/trace        -> trace an uploaded image into `path` objects (M2)
+  PUT  /api/settings     -> update units / scale / size
+  GET  /api/export/svg   -> image/svg+xml
+  GET  /api/export/png   -> image/png
+  GET  /api/export/pdf   -> application/pdf
+   GET  /api/export/dxf   -> application/dxf (M3)
+   GET  /api/export/gcode -> text/plain (M3)
+   GET  /api/projects     -> list saved project files (M5)
+   POST /api/project/save -> save current doc to a named project (M5)
+   POST /api/project/load -> load a named project into the doc (M5)
+   DELETE /api/project/{name} -> remove a saved project (M5)
+   POST /api/doc          -> full document replace (persist / undo / restore) (M5)
+"""
+
+from __future__ import annotations
+
+import asyncio
+import json
+import tempfile
+import time
+
+from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile
+from fastapi.responses import FileResponse, Response
+from fastapi.staticfiles import StaticFiles
+from starlette.background import BackgroundTask
+
+from core import part3d, worker3d
+from core.document import Document, circle, dimension, line, rect, text
+from core.export import to_dxf, to_gcode, to_png_pdf, to_svg
+from core.runner import run
+
+app = FastAPI(title="sketchDiy")
+
+
+@app.middleware("http")
+async def no_cache(request: Request, call_next):
+    # Always revalidate assets so local edits to app.js / index.html /
+    # tailwind.css are picked up immediately. Without this, a browser that cached
+    # the page during development shows stale code and "changes do nothing".
+    response = await call_next(request)
+    response.headers["Cache-Control"] = "no-store"
+    return response
+
+doc = Document()
+# a little starter scene so the canvas isn't empty
+doc.add(rect(300, 250, 200, 120, fill="#cfe8ff", stroke="#1f6feb", strokeWidth=3,
+             meta={"label": "board"}))
+doc.add(circle(620, 250, 60, fill=None, stroke="#d9480f", strokeWidth=3))
+doc.add(line(150, 520, 750, 520, stroke="#2f9e44", strokeWidth=3))
+doc.add(text(450, 120, "DIY Sketch", stroke="#222", fontSize=40))
+doc.add(dimension(200, 340, 400, 340, offset=26))
+
+
+@app.get("/")
+def index():
+    return FileResponse("static/index.html")
+
+
+@app.get("/api/doc")
+def get_doc():
+    return doc.to_dict()
+
+
+@app.post("/api/objects")
+def post_object(obj: dict):
+    if "id" not in obj:
+        raise HTTPException(400, "object requires an 'id'")
+    doc.upsert(obj)
+    return {"ok": True, "id": obj["id"]}
+
+
+@app.put("/api/objects/{oid}")
+def put_object(oid: str, obj: dict):
+    if doc.find(oid) is None:
+        raise HTTPException(404, "object not found")
+    obj["id"] = oid
+    doc.upsert(obj)
+    return {"ok": True}
+
+
+@app.delete("/api/objects/{oid}")
+def delete_object(oid: str):
+    if doc.find(oid) is None:
+        raise HTTPException(404, "object not found")
+    doc.remove(oid)
+    # Cascade: drop any connectors that referenced the deleted object.
+    doc.objects = [
+        o for o in doc.objects
+        if not (o.get("type") == "connector"
+                and (o.get("geometry", {}).get("from", {}).get("id") == oid
+                     or o.get("geometry", {}).get("to", {}).get("id") == oid))
+    ]
+    return {"ok": True}
+
+
+@app.post("/api/clear")
+def clear_objects():
+    doc.clear()
+    return {"ok": True}
+
+
+@app.post("/api/run")
+def run_code(payload: dict):
+    code = payload.get("code", "")
+    try:
+        updated = run(code, doc)
+    except RuntimeError as e:
+        raise HTTPException(400, str(e)) from e
+    return updated
+
+
+@app.post("/api/trace")
+async def trace_image(
+    file: UploadFile = File(...),
+    mode: str = Form("outline"),
+    threshold: int = Form(128),
+    invert: bool = Form(False),
+    remove_bg: bool = Form(False),
+    simplify: float = Form(1.5),
+    min_area: float = Form(10.0),
+    smooth: bool = Form(False),
+):
+    """Trace an uploaded image into `path` objects.
+
+    Read-only: the objects are *returned*, not added to the document, so the
+    frontend can preview/commit them however it likes.
+    """
+    # heavy imaging deps are imported lazily so server start stays fast
+    from core.trace import trace_from_bytes
+
+    data = await file.read()
+    if not data:
+        raise HTTPException(400, "empty image upload")
+    try:
+        objects = trace_from_bytes(
+            data,
+            mode=mode,
+            threshold=threshold,
+            invert=invert,
+            simplify=simplify,
+            min_area=min_area,
+            smooth=smooth,
+            remove_bg=remove_bg,
+            max_width=doc.width,
+            max_height=doc.height,
+        )
+    except RuntimeError as e:  # e.g. rembg not installed
+        raise HTTPException(400, str(e)) from e
+    except Exception as e:  # noqa: BLE001 - bad image, bad params, ...
+        raise HTTPException(400, f"could not trace image: {e}") from e
+    return {"objects": objects, "count": len(objects)}
+
+
+@app.put("/api/settings")
+def update_settings(payload: dict):
+    for key in ("units", "px_per_unit", "width", "height", "background",
+                "grid_color", "grid_size", "export_grid", "show_grid",
+                "show_rulers", "theme", "recolor_on_theme", "snap_grid",
+                "snap_objects", "snap_page", "layers"):
+        if key in payload:
+            setattr(doc, key, payload[key])
+    return doc.to_dict()
+
+
+@app.post("/api/doc")
+def replace_doc(payload: dict):
+    """Full document replace (used by the frontend to persist/undo/restore)."""
+    doc.load_dict(payload)
+    return doc.to_dict()
+
+
+@app.get("/api/export/svg")
+def export_svg():
+    return Response(content=to_svg(doc.to_dict()), media_type="image/svg+xml")
+
+
+@app.get("/api/export/png")
+def export_png():
+    return Response(content=to_png_pdf(doc.to_dict(), "png"),
+                    media_type="image/png")
+
+
+@app.get("/api/export/pdf")
+def export_pdf():
+    return Response(content=to_png_pdf(doc.to_dict(), "pdf"),
+                    media_type="application/pdf")
+
+
+@app.get("/api/export/dxf")
+def export_dxf():
+    """AutoCAD DXF (R2000) of cuttable outlines, in millimetres."""
+    return Response(content=to_dxf(doc.to_dict()), media_type="application/dxf")
+
+
+@app.get("/api/export/gcode")
+def export_gcode(
+    feed: float = 300.0,
+    plunge: float = 100.0,
+    depth: float = -3.0,
+    safe: float = 5.0,
+):
+    """Basic profiling G-code (mm) with optional feed/plunge/depth/safe params."""
+    return Response(
+        content=to_gcode(doc.to_dict(), feed=feed, plunge=plunge,
+                         depth=depth, safe_z=safe),
+        media_type="text/plain",
+    )
+
+
+# --------------------------------------------------------------------------
+# 3D: extrude the 2D sketch into solids (build123d-backed, optional dep).
+# The 2D app stays lightweight — build123d is only touched on these routes.
+# --------------------------------------------------------------------------
+
+def _objects_for_ids(ids):
+    """Resolve a list of object ids (or None for the whole doc) to objects."""
+    if not ids:
+        return None  # caller treats None as "use the whole document"
+    by_id = {o["id"]: o for o in doc.objects}
+    objs = [by_id[i] for i in ids if i in by_id]
+    if not objs:
+        raise HTTPException(400, "none of the supplied ids exist in the document")
+    return objs
+
+
+@app.post("/api/3d/extrude")
+async def build_3d(payload: dict):
+    """Build a preview mesh from the doc/selection.
+
+    Body: {"ids": [..] | null, "op": "extrude" | "revolve",
+    "depth": <mm>, "angle": <deg>}. Returns triangle-soup JSON (positions +
+    indices) for the frontend to render, plus a bounding box and accuracy flag.
+    The heavy geometry work runs in a pool of worker *processes* (falling back to
+    a thread) so the server stays responsive even for large/boolean-heavy models
+    and a kernel crash can't take the server down.
+    """
+    ids = payload.get("ids") or None
+    op = (payload.get("op") or "extrude").lower()
+    try:
+        depth = float(payload.get("depth", 10.0))
+        angle = float(payload.get("angle", 360.0))
+    except (TypeError, ValueError):
+        raise HTTPException(400, "depth/angle must be numbers")
+    if op == "revolve":
+        if angle <= 0 or angle > 360:
+            raise HTTPException(400, "angle must be 0 < angle <= 360")
+    else:
+        if depth <= 0:
+            raise HTTPException(400, "depth must be > 0")
+    try:
+        objs = _objects_for_ids(ids)
+    except HTTPException:
+        raise
+    try:
+        if op == "revolve":
+            mesh = await worker3d.run(
+                part3d.revolve_to_mesh, doc.to_dict(), objs, angle, None, True
+            )
+        else:
+            mesh = await worker3d.run(
+                part3d.extrude_to_mesh, doc.to_dict(), objs, depth, True
+            )
+    except (ValueError, RuntimeError) as e:
+        raise HTTPException(400, str(e)) from e
+    # build123d flag is computed inside the worker and returned on the mesh.
+    mesh["build123d"] = mesh.get("build123d", False)
+    return mesh
+
+
+@app.post("/api/3d/export")
+async def export_3d(payload: dict):
+    """Export the solid as STL (always) or STEP (needs build123d).
+
+    Body: {"ids": [..] | null, "op": "extrude" | "revolve", "depth": <mm>,
+    "angle": <deg>, "format": "stl" | "step"}. STL works with or without
+    build123d (accurate tessellation when present, else a simple prism).
+    STEP requires build123d's Open Cascade kernel. The build + file write run in
+    a pool of worker *processes* (falling back to a thread) so the server never
+    blocks on Open Cascade.
+    """
+    ids = payload.get("ids") or None
+    fmt = (payload.get("format") or "stl").lower()
+    op = (payload.get("op") or "extrude").lower()
+    if fmt not in ("stl", "step"):
+        raise HTTPException(400, "format must be 'stl' or 'step'")
+    try:
+        depth = float(payload.get("depth", 10.0))
+        angle = float(payload.get("angle", 360.0))
+    except (TypeError, ValueError):
+        raise HTTPException(400, "depth/angle must be numbers")
+    if op == "revolve":
+        if angle <= 0 or angle > 360:
+            raise HTTPException(400, "angle must be 0 < angle <= 360")
+    else:
+        if depth <= 0:
+            raise HTTPException(400, "depth must be > 0")
+
+    try:
+        objs = _objects_for_ids(ids)
+    except HTTPException:
+        raise
+    respect = objs is None
+    outlines = part3d.doc_cut_outlines_mm(doc, objs, respect_visibility=respect)
+    if not any(o["closed"] and len(o["pts"]) >= 3 for o in outlines):
+        raise HTTPException(400, "select at least one closed shape to extrude/revolve")
+
+    suffix = "stl" if fmt == "stl" else "step"
+    media = "model/stl" if fmt == "stl" else "application/step"
+    tmp = tempfile.NamedTemporaryFile(delete=False, suffix="." + suffix)
+    tmp.close()
+    path = Path(tmp.name)
+
+    try:
+        # Whole build + write happens in a worker process: the kernel work stays
+        # off the event loop and a crash is contained to that process. The worker
+        # also handles the pure-Python prism STL fallback when build123d is absent.
+        await worker3d.run(
+            part3d.export_solid, outlines, op, depth, angle, fmt, str(path), None
+        )
+    except (ValueError, RuntimeError) as e:
+        path.unlink(missing_ok=True)
+        raise HTTPException(400, str(e)) from e
+    except Exception as e:  # noqa: BLE001 - OCP/IO errors
+        path.unlink(missing_ok=True)
+        raise HTTPException(500, f"3D export failed: {e}") from e
+
+    return FileResponse(
+        path,
+        media_type=media,
+        filename=f"sketch.{suffix}",
+        background=BackgroundTask(path.unlink, missing_ok=True),
+    )
+
+
+# --------------------------------------------------------------------------
+# M5: project persistence (named project files in ./projects, plus the
+# frontend's localStorage autosave). The in-memory doc is the source of truth;
+# these endpoints snapshot/restore it as JSON.
+# --------------------------------------------------------------------------
+
+from pathlib import Path  # noqa: E402
+
+PROJECTS_DIR = Path(__file__).parent / "projects"
+PROJECTS_DIR.mkdir(exist_ok=True)
+
+
+def _project_path(name: str) -> Path:
+    safe = "".join(c for c in name if c.isalnum() or c in "-_ .")
+    safe = safe.strip().strip(".") or "untitled"
+    return PROJECTS_DIR / f"{safe}.json"
+
+
+@app.get("/api/projects")
+def list_projects():
+    files = sorted(PROJECTS_DIR.glob("*.json"), key=lambda p: p.stat().st_mtime,
+                   reverse=True)
+    return [
+        {"name": p.stem, "saved_at": int(p.stat().st_mtime)}
+        for p in files
+    ]
+
+
+@app.post("/api/project/save")
+def save_project(payload: dict):
+    name = (payload.get("name") or "").strip()
+    if not name:
+        raise HTTPException(400, "project name required")
+    data = dict(doc.to_dict())
+    data["name"] = name
+    data["saved_at"] = int(time.time())
+    _project_path(name).write_text(json.dumps(data, indent=2), encoding="utf-8")
+    return {"ok": True, "name": name}
+
+
+@app.post("/api/project/load")
+def load_project(payload: dict):
+    name = (payload.get("name") or "").strip()
+    if not name:
+        raise HTTPException(400, "project name required")
+    path = _project_path(name)
+    if not path.exists():
+        raise HTTPException(404, "project not found")
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except Exception as e:  # noqa: BLE001 - corrupt file
+        raise HTTPException(400, f"could not read project: {e}") from e
+    doc.load_dict(data)
+    return doc.to_dict()
+
+
+@app.delete("/api/project/{name}")
+def delete_project(name: str):
+    path = _project_path(name)
+    if path.exists():
+        path.unlink()
+    return {"ok": True, "name": name}
+
+
+app.mount("/static", StaticFiles(directory="static"), name="static")
+
+
+if __name__ == "__main__":
+    import uvicorn
+
+    uvicorn.run(app, host="127.0.0.1", port=8000, reload=True)

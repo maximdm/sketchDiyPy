@@ -1,0 +1,17 @@
+# --- Python ---
+venv/
+.venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.python-version
+
+# --- Generated UI artifact (overwritten by tests/test_ui_smoke.py) ---
+docs/ui-smoke.png
+
+# --- Runtime data (server-side saved sketches) ---
+projects/*
+
+# --- Local tooling / secrets ---
+.env
+node_modules/

@@ -1,0 +1,433 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>sketchDiy</title>
+
+  <!-- Pre-compiled Tailwind (static/tailwind.css) + Fabric.js are both served
+       locally: no CDN at runtime, so the whole app (styling and canvas) works
+       fully offline. Tailwind is generated once (see AGENTS.md); fabric.min.js
+       is vendored as-is. -->
+  <link rel="stylesheet" href="/static/tailwind.css" />
+
+  <!-- Import map so the vendored three.js + OrbitControls load with bare
+       specifiers, fully offline (no CDN). -->
+  <script type="importmap">
+  {
+    "imports": {
+      "three": "/static/vendor/three.module.js",
+      "three/addons/": "/static/vendor/addons/"
+    }
+  }
+  </script>
+
+  <!-- Chalkboard theme overrides. Applied only when <body> carries the `chalk`
+       class (set by the Theme selector in app.js). Kept as plain CSS so it can
+       override the compiled Tailwind surfaces without recompiling Tailwind. -->
+  <style>
+    body.chalk { background: #0f141a; color: #e8eef2; }
+    body.chalk header {
+      background: #141b22 !important; border-color: #26323d !important;
+      backdrop-filter: none;
+    }
+    body.chalk .canvas-wrap { background: #0e1116 !important; }
+    body.chalk .card {
+      background: #141b22 !important; border-color: #26323d !important; color: #e8eef2;
+    }
+    body.chalk .card h3 { color: #e8eef2; }
+    body.chalk .card h3 small { color: #8aa0b0; }
+    body.chalk .hint, body.chalk .readout, body.chalk .proj-empty { color: #93a6b5; }
+    body.chalk .kbd { background: #1c2530; border-color: #2b3744; color: #b9c8d4; }
+    body.chalk .field {
+      background: #0f141a; border-color: #2b3744; color: #e8eef2;
+    }
+    body.chalk .field-label, body.chalk .check-label { color: #b9c8d4; }
+    body.chalk .btn, body.chalk .xbtn {
+      background: #1a232c; border-color: #2b3744; color: #cfe0ec;
+    }
+    body.chalk .btn:hover, body.chalk .xbtn:hover { border-color: #8ab4ff; color: #8ab4ff; }
+    body.chalk .btn-primary { background: #1f3a5f; border-color: #3b6ea5; color: #cfe6ff; }
+    body.chalk .btn-primary:hover { background: #28507f; color: #eaf3ff; }
+    body.chalk .active { background: rgba(138,180,255,.16); border-color: #8ab4ff; color: #8ab4ff; }
+
+    body.blueprint { background: #0a1f3a; color: #d6ecff; }
+    body.blueprint header {
+      background: #0d2b52 !important; border-color: #1e4f86 !important; backdrop-filter: none;
+    }
+    body.blueprint .canvas-wrap { background: #0d2b52 !important; }
+    body.blueprint .card {
+      background: #0d2b52 !important; border-color: #1e4f86 !important; color: #d6ecff;
+    }
+    body.blueprint .card h3 { color: #eaf4ff; }
+    body.blueprint .card h3 small { color: #7fb4e6; }
+    body.blueprint .hint, body.blueprint .readout, body.blueprint .proj-empty { color: #9bc2e6; }
+    body.blueprint .kbd { background: #0a1f3a; border-color: #1e4f86; color: #cfe6ff; }
+    body.blueprint .field { background: #0a1f3a; border-color: #1e4f86; color: #eaf4ff; }
+    body.blueprint .field-label, body.blueprint .check-label { color: #cfe6ff; }
+    body.blueprint .btn, body.blueprint .xbtn {
+      background: #103460; border-color: #1e4f86; color: #d6ecff;
+    }
+    body.blueprint .btn:hover, body.blueprint .xbtn:hover { border-color: #9be7ff; color: #9be7ff; }
+    body.blueprint .btn-primary { background: #15518f; border-color: #2a6cb0; color: #eaf4ff; }
+    body.blueprint .btn-primary:hover { background: #1b66b3; color: #ffffff; }
+    body.blueprint .active { background: rgba(155,231,255,.16); border-color: #9be7ff; color: #9be7ff; }
+
+    body.kraft { background: #f3ead6; color: #3a2e1f; }
+    body.kraft header {
+      background: #fbf5e6 !important; border-color: #e0cfa6 !important; backdrop-filter: none;
+    }
+    body.kraft .canvas-wrap { background: #efe2c4 !important; }
+    body.kraft .card {
+      background: #fbf5e6 !important; border-color: #e0cfa6 !important; color: #3a2e1f;
+    }
+    body.kraft .card h3 { color: #4a3a26; }
+    body.kraft .card h3 small { color: #917a55; }
+    body.kraft .hint, body.kraft .readout, body.kraft .proj-empty { color: #8a7450; }
+    body.kraft .kbd { background: #efe2c4; border-color: #e0cfa6; color: #6b5638; }
+    body.kraft .field { background: #fbf5e6; border-color: #e0cfa6; color: #3a2e1f; }
+    body.kraft .field-label, body.kraft .check-label { color: #5b4636; }
+    body.kraft .btn, body.kraft .xbtn { background: #f0e4c8; border-color: #e0cfa6; color: #5b4636; }
+    body.kraft .btn:hover, body.kraft .xbtn:hover { border-color: #b5651d; color: #b5651d; }
+    body.kraft .btn-primary { background: #c98a3c; border-color: #b5651d; color: #fff; }
+    body.kraft .btn-primary:hover { background: #b5651d; color: #fff; }
+    body.kraft .active { background: rgba(181,101,29,.16); border-color: #b5651d; color: #b5651d; }
+
+    body.neon { background: #070a0e; color: #b9e8ff; }
+    body.neon header {
+      background: #0b0f14 !important; border-color: #1c2b33 !important; backdrop-filter: none;
+    }
+    body.neon .canvas-wrap { background: #0b0f14 !important; }
+    body.neon .card {
+      background: #0b0f14 !important; border-color: #1c2b33 !important; color: #b9e8ff;
+    }
+    body.neon .card h3 { color: #eaffff; }
+    body.neon .card h3 small { color: #5fd0e0; }
+    body.neon .hint, body.neon .readout, body.neon .proj-empty { color: #6fb8c8; }
+    body.neon .kbd { background: #070a0e; border-color: #1c2b33; color: #b9e8ff; }
+    body.neon .field { background: #070a0e; border-color: #1c2b33; color: #eaffff; }
+    body.neon .field-label, body.neon .check-label { color: #b9e8ff; }
+    body.neon .btn, body.neon .xbtn { background: #10161d; border-color: #1c2b33; color: #39d0ff; }
+    body.neon .btn:hover, body.neon .xbtn:hover { border-color: #39d0ff; color: #7fe6ff; }
+    body.neon .btn-primary { background: #0d3a4a; border-color: #39d0ff; color: #eaffff; }
+    body.neon .btn-primary:hover { background: #11506a; color: #fff; }
+    body.neon .active { background: rgba(57,208,255,.16); border-color: #39d0ff; color: #7fe6ff; }
+
+    /* Theme-aware colour swatch on each shape-tool button. */
+    .sw {
+      display: inline-block; width: 11px; height: 11px; border-radius: 3px;
+      margin-right: 6px; vertical-align: -1px; border: 1px solid rgba(0,0,0,.18);
+      background: #1f6feb;
+    }
+    body.chalk .sw, body.blueprint .sw, body.kraft .sw, body.neon .sw {
+      border-color: rgba(255,255,255,.25);
+    }
+
+    /* Layers panel rows. */
+    .layer-list { display: flex; flex-direction: column; gap: 6px; margin-bottom: 8px; }
+    .layer-row {
+      display: flex; align-items: center; gap: 6px;
+      padding: 4px 6px; border: 1px solid #e2e8f0; border-radius: 8px;
+      background: #fff; cursor: pointer;
+    }
+    .layer-row.active { border-color: #3b82f6; background: rgba(59,130,246,.10); }
+    .layer-row .layer-name {
+      flex: 1; min-width: 0; font-size: 13px; padding: 2px 6px;
+    }
+    .layer-row .xbtn { padding: 2px 7px; font-size: 13px; line-height: 1.2; }
+    body.chalk .layer-row, body.blueprint .layer-row,
+    body.kraft .layer-row, body.neon .layer-row {
+      border-color: #2b3744; background: #141b22;
+    }
+
+    /* 3D extrude viewer canvas. */
+    .d3-canvas {
+      width: 100%; height: 240px; display: block;
+      background: #0b1220; border: 1px solid #e2e8f0; border-radius: 8px;
+      margin: 8px 0; cursor: grab; touch-action: none;
+    }
+    .d3-canvas:active { cursor: grabbing; }
+    body.chalk .d3-canvas, body.blueprint .d3-canvas,
+    body.kraft .d3-canvas, body.neon .d3-canvas {
+      border-color: #2b3744;
+    }
+  </style>
+
+  <script src="/static/fabric.min.js"></script>
+</head>
+
+<body class="bg-slate-100 font-sans text-ink">
+  <header class="sticky top-0 z-10 flex flex-wrap items-center gap-3 border-b border-line bg-white/90 px-4 py-2.5 shadow-sm backdrop-blur">
+    <div class="text-lg font-extrabold tracking-tight text-ink">✏️ sketchDiy</div>
+
+    <div class="flex flex-1 flex-wrap items-center gap-2">
+      <button class="btn" data-shape="rect"><span class="sw"></span>▭ Rect</button>
+      <button class="btn" data-shape="circle"><span class="sw"></span>● Circle</button>
+      <button class="btn" data-shape="line"><span class="sw"></span>／ Line</button>
+      <button class="btn" data-shape="text"><span class="sw"></span>T Text</button>
+      <button id="dimBtn" class="btn" title="Measure a distance: click two points (Esc cancels)">↔ Dimension</button>
+      <button id="connectBtn" class="btn" title="Select two objects, then link them with a connector line">🔗 Connect</button>
+      <span class="sep"></span>
+      <button id="deleteBtn" class="btn" title="Delete selected (Del)">🗑 Delete</button>
+      <button id="clearBtn" class="btn">Clear all</button>
+      <button id="unlockAllBtn" class="btn" title="Unlock every locked object">🔓 Unlock all</button>
+      <span class="sep"></span>
+      <label class="field-label">Units
+        <select id="units" class="field">
+          <option value="mm">mm</option>
+          <option value="cm">cm</option>
+          <option value="inch">inch</option>
+        </select>
+      </label>
+      <label class="field-label">Align
+        <select id="alignSelect" class="field" title="Align or distribute the selected objects">
+          <option value="">—</option>
+          <option value="left">Left edges</option>
+          <option value="centerH">Centers (H)</option>
+          <option value="right">Right edges</option>
+          <option value="top">Top edges</option>
+          <option value="centerV">Middles (V)</option>
+          <option value="bottom">Bottom edges</option>
+          <option value="distH">Distribute H</option>
+          <option value="distV">Distribute V</option>
+        </select>
+      </label>
+      <label class="field-label" title="Snapping while moving and resizing: grid step, other objects, or the page edges/centre. Hold Alt to move freely. These are saved with the project.">Snap
+        <span class="ml-1 inline-flex items-center gap-2">
+          <label class="check-label"><input type="checkbox" id="snapGrid" checked /> Grid</label>
+          <label class="check-label"><input type="checkbox" id="snapObjects" checked /> Objects</label>
+          <label class="check-label"><input type="checkbox" id="snapPage" checked /> Page</label>
+        </span>
+      </label>
+      <span id="scaleReadout" class="readout"></span>
+    </div>
+
+    <div class="ml-auto flex items-center gap-2 text-sm text-slate-500">
+      <span>Export:</span>
+      <a class="xbtn" href="/api/export/svg" target="_blank">SVG</a>
+      <a class="xbtn" href="/api/export/png" target="_blank">PNG</a>
+      <a class="xbtn" href="/api/export/pdf" target="_blank">PDF</a>
+      <a class="xbtn" href="/api/export/dxf" download="sketch.dxf">DXF</a>
+      <a class="xbtn" href="/api/export/gcode" download="sketch.nc">G-code</a>
+    </div>
+  </header>
+
+  <main class="flex flex-col gap-4 p-4 lg:h-[calc(100vh-3.25rem)] lg:flex-row lg:overflow-hidden">
+    <section class="canvas-wrap flex min-h-[60vh] flex-1 items-center justify-center overflow-auto rounded-xl border border-line bg-white p-3 shadow-sm lg:min-h-0">
+      <canvas id="c"></canvas>
+    </section>
+
+    <aside class="panel flex w-full flex-col gap-4 overflow-auto lg:w-[360px]">
+      <div class="card">
+        <h3>Properties</h3>
+        <div id="props" class="hint">Select an object to edit it.</div>
+        <div id="propsBody" hidden>
+          <label class="field-label">Stroke <input type="color" id="pStroke" value="#222222" /></label>
+          <div class="field-label">Fill
+            <input type="color" id="pFill" value="#ffffff" />
+            <label class="check-label"><input type="checkbox" id="pFillNone" /> none</label>
+          </div>
+          <label class="field-label">Stroke width
+            <input type="range" id="pWidth" min="0" max="20" value="2" class="flex-1" />
+            <span id="pWidthVal" class="text-sm text-muted">2</span>
+          </label>
+          <div id="selSize" class="size-readout"></div>
+          <label class="check-label" title="Lock so this object can't be selected or moved (use 'Unlock all' to release)">
+            <input type="checkbox" id="pLock" /> Lock
+          </label>
+        </div>
+      </div>
+
+      <div class="card">
+        <h3>Page <small>(size · color · grid · rulers)</small></h3>
+        <p class="hint">Set the artboard size in the current units, its background
+          colour, the grid colour/visibility, and whether the measurement rulers
+          show. Changes apply live and are saved with the document.</p>
+        <div class="tpl-params">
+          <label>Width
+            <input type="number" id="pageW" class="field" min="1" step="1" />
+          </label>
+          <label>Height
+            <input type="number" id="pageH" class="field" min="1" step="1" />
+          </label>
+          <label>Background
+            <input type="color" id="pageBg" value="#ffffff" />
+          </label>
+          <label>Grid
+            <input type="color" id="gridColor" value="#eef2f7" />
+          </label>
+          <label>Grid size (px)
+            <input type="number" id="gridSize" class="field" min="4" max="200" step="1" value="20" />
+          </label>
+        </div>
+        <label class="check-label" title="Show the drafting grid on the artboard">
+          <input type="checkbox" id="gridToggle" checked /> Show grid
+        </label>
+        <label class="check-label" title="Bake the grid into SVG / PNG / PDF exports (hairlines) and the DXF (GRID layer). In G-code it is added as a non-cutting rapid reference pass at safe Z — the tool never plunges into it.">
+          <input type="checkbox" id="exportGrid" /> Include grid in export
+        </label>
+        <label class="check-label" title="Show the top/left measurement rulers and the scale bar">
+          <input type="checkbox" id="pageRulers" checked /> Show rulers
+        </label>
+        <label class="field-label">Theme
+          <select id="themeSelect" class="field">
+            <option value="light">Light (paper)</option>
+            <option value="chalk">Chalkboard</option>
+            <option value="blueprint">Blueprint</option>
+            <option value="kraft">Kraft paper</option>
+            <option value="neon">Neon</option>
+          </select>
+        </label>
+        <label class="check-label" title="When on, switching themes also repaints your existing shapes to the theme palette. Off (default) keeps your artwork's own colours and only changes the board, UI and new-shape defaults.">
+          <input type="checkbox" id="recolorOnTheme" /> Recolor artwork on theme change
+        </label>
+        <button id="resetTheme" class="btn btn-primary" type="button"
+          title="Re-apply this theme's default board, grid and colours (after manual tweaks)">Reset page to theme</button>
+      </div>
+
+      <div class="card">
+        <h3>Image → paths <small>(trace)</small></h3>
+        <p class="hint">Upload a logo or photo and trace it into editable
+          <code>path</code> objects. Works best on dark shapes over a light
+          background; use <em>Edges</em> for line art.</p>
+        <label class="field-label flex-wrap">Image
+          <input type="file" id="traceFile" accept="image/*" />
+        </label>
+        <label class="field-label">Mode
+          <select id="traceMode" class="field">
+            <option value="outline">Outline (filled shapes)</option>
+            <option value="edges">Edges (line art)</option>
+          </select>
+        </label>
+        <label class="field-label">Threshold
+          <input type="range" id="traceThreshold" min="0" max="255" value="128" class="flex-1" />
+          <span id="traceThresholdVal" class="text-sm text-muted">128</span>
+        </label>
+        <label class="check-label"><input type="checkbox" id="traceInvert" /> Invert</label>
+        <label class="check-label" title="Round the traced polylines into smooth curves">
+          <input type="checkbox" id="traceSmooth" /> Smooth curves
+        </label>
+        <label class="check-label" title="Optional: needs rembg installed (pip install &quot;rembg[cpu]&quot;)">
+          <input type="checkbox" id="traceRemBg" /> Remove background (rembg)
+        </label>
+        <div class="console-actions">
+          <button id="traceBtn" class="btn btn-primary">✎ Trace to paths</button>
+          <span id="traceStatus"></span>
+        </div>
+      </div>
+
+      <div class="card">
+        <h3>Templates <small>(M4)</small></h3>
+        <p class="hint">Pick a starter layout, set its size, and generate. Built from
+          the console helpers (<code>row</code>/<code>column</code>/<code>grid</code>/
+          <code>connect</code>); edit the result or open the console to see the code.</p>
+        <label class="field-label">Template
+          <select id="tplSelect" class="field">
+            <option value="shelf">📚 Shelf unit</option>
+            <option value="drillGrid">🕳 Drill guide</option>
+            <option value="box">📦 Box / crate</option>
+            <option value="mat">🔲 Cutting mat</option>
+          </select>
+        </label>
+        <div id="tplParams" class="tpl-params"></div>
+        <div class="console-actions">
+          <button id="tplGenerate" class="btn btn-primary">▶ Generate</button>
+        </div>
+      </div>
+
+      <div class="card">
+        <h3>Projects <small>(M5)</small></h3>
+        <p class="hint">Your work auto-saves to this browser. Save named copies on the
+          server, or press <kbd>Ctrl</kbd>+<kbd>Z</kbd> to undo.</p>
+        <label class="field-label">Save as
+          <input type="text" id="projName" class="field" placeholder="my-shelf" />
+        </label>
+        <div class="console-actions">
+          <button id="projSave" class="btn btn-primary">💾 Save</button>
+        </div>
+        <div id="projList" class="proj-list"></div>
+      </div>
+
+      <div class="card">
+        <h3>Layers <small>(M5)</small></h3>
+        <p class="hint">Group objects into named layers. Click a layer to make it
+          active (new shapes go there) and select its objects. Toggle visibility
+          (👁) to hide a layer in the canvas and every export, or lock (🔒) to
+          keep its objects from being moved.</p>
+        <div id="layerList" class="layer-list"></div>
+        <div class="console-actions">
+          <button id="layerAdd" class="btn">＋ Add layer</button>
+          <button id="layerDelete" class="btn">🗑 Delete</button>
+          <span id="layerStatus"></span>
+        </div>
+      </div>
+
+      <div class="card">
+        <h3>3D Extrude <small>(build123d)</small></h3>
+        <p class="hint">Turn the sketch into a solid. Select shapes first and use
+          <em>Extrude selection</em>, or <em>Extrude all</em> for the whole page.
+          Drag to rotate, scroll to zoom. STEP export needs build123d installed.</p>
+        <div class="tpl-params">
+          <label>Operation
+            <select id="d3op" class="field">
+              <option value="extrude">Extrude</option>
+              <option value="revolve">Revolve (lathe)</option>
+            </select>
+          </label>
+          <label id="d3depthWrap">Thickness (mm)
+            <input type="number" id="d3depth" class="field" min="0.1" step="0.5" value="10" />
+          </label>
+          <label id="d3angleWrap" hidden>Angle (°)
+            <input type="number" id="d3angle" class="field" min="1" max="360" step="5" value="360" />
+          </label>
+        </div>
+        <canvas id="d3canvas" class="d3-canvas" width="320" height="240"></canvas>
+        <div class="console-actions">
+          <label class="check-label"><input type="checkbox" id="d3wire" /> Wireframe</label>
+          <label class="check-label"><input type="checkbox" id="d3grid" checked /> Grid + axes</label>
+        </div>
+        <div class="console-actions">
+          <button id="d3ExtrudeSel" class="btn">⬗ Extrude selection</button>
+          <button id="d3ExtrudeAll" class="btn btn-primary">⬗ Extrude all</button>
+        </div>
+        <div class="console-actions">
+          <button id="d3stl" class="xbtn" disabled>⬇ STL</button>
+          <button id="d3step" class="xbtn" disabled>⬇ STEP</button>
+          <span id="d3status" class="hint"></span>
+        </div>
+      </div>
+
+      <div class="card card-grow">
+        <h3>Python console <small>(Hybrid mode)</small></h3>
+        <p class="hint">Try: <code>rect(450, 350, 120, 80, fill="#ffe066")</code> or
+          <code>clear()</code> then build a layout. Helpers:
+          <code>rect, circle, line, path, text, dimension, add, clear, doc</code>.
+          Link objects with <code>connect(a, b, "left", "right")</code>; arrange groups
+          with <code>row(parts)</code>, <code>column(parts)</code>,
+          <code>grid(parts, 3)</code>.</p>
+        <textarea id="code" spellcheck="false"># build a shelf unit, then link the uprights
+clear()
+for i in range(3):
+    rect(450, 200 + i*120, 300, 14, fill="#d9b38c", stroke="#7a5230")
+left  = rect(310, 180, 14, 380, fill="#b07d4f", stroke="#7a5230")
+right = rect(576, 180, 14, 380, fill="#b07d4f", stroke="#7a5230")
+text(450, 90, "My Shelf", stroke="#333", fontSize=34)
+dimension(300, 580, 600, 580, offset=-24)
+# anchor-based connector: follows the uprights when they move
+connect(left, right, "right", "left")
+</textarea>
+        <div class="console-actions">
+          <button id="runBtn" class="btn btn-primary">▶ Run</button>
+          <button id="resetBtn" class="btn">↺ Reset scene</button>
+          <span id="runStatus"></span>
+        </div>
+      </div>
+    </aside>
+  </main>
+
+  <!-- Frontend is split into ES modules under /static/js/ (no build step, no
+       CDN). `app.js` is the entry point; it imports the others. `fabric.min.js`
+       is a classic script so the global `fabric` is available to the modules. -->
+  <script type="module" src="/static/js/app.js"></script>
+</body>
+</html>
