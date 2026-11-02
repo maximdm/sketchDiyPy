@@ -24,7 +24,7 @@ dependencies = [
 #   * trimesh    -> cleans the no-build123d fallback meshes
 3d = ["build123d", "trimesh"]
 # Test tooling. The Playwright UI smoke test is gated behind UI_SMOKE_RUN=1.
-test = ["pytest", "playwright"]
+test = ["pytest", "playwright", "httpx"]
 
 [tool.setuptools]
 packages = ["core"]

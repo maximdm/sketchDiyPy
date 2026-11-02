@@ -3,10 +3,43 @@
 import asyncio
 import time
 
+import httpx
 import pytest
-from fastapi.testclient import TestClient
 import server
 from core import part3d
+
+
+def client(app):
+    """Sync ASGI test client built on httpx.
+
+    We avoid starlette.testclient here: recent Starlette's TestClient requires the
+    `httpx2` shim, whereas driving the app through httpx.ASGITransport works on
+    any current Starlette/httpx and needs no extra package. httpx.ASGITransport is
+    async-only, so each call spins up an AsyncClient via asyncio.run; the returned
+    httpx.Response still exposes .status_code / .json() / .content synchronously.
+    """
+
+    class _ASGIClient:
+        def __init__(self, app):
+            self.app = app
+
+        def _request(self, method, url, **kwargs):
+            async def go():
+                async with httpx.AsyncClient(
+                    transport=httpx.ASGITransport(app=self.app),
+                    base_url="http://test",
+                ) as ac:
+                    return await ac.request(method, url, **kwargs)
+
+            return asyncio.run(go())
+
+        def post(self, url, **kwargs):
+            return self._request("POST", url, **kwargs)
+
+        def get(self, url, **kwargs):
+            return self._request("GET", url, **kwargs)
+
+    return _ASGIClient(app)
 
 
 def _slow_job():
@@ -16,7 +49,7 @@ def _slow_job():
 
 
 def test_3d_build_extrude():
-    c = TestClient(server.app)
+    c = client(server.app)
     r = c.post("/api/3d/extrude", json={"depth": 10})
     assert r.status_code == 200
     j = r.json()
@@ -26,7 +59,7 @@ def test_3d_build_extrude():
 
 
 def test_3d_build_revolve():
-    c = TestClient(server.app)
+    c = client(server.app)
     r = c.post("/api/3d/extrude", json={"op": "revolve", "angle": 360})
     assert r.status_code == 200
     j = r.json()
@@ -35,13 +68,13 @@ def test_3d_build_revolve():
 
 
 def test_3d_build_rejects_bad_angle():
-    c = TestClient(server.app)
+    c = client(server.app)
     r = c.post("/api/3d/extrude", json={"op": "revolve", "angle": 400})
     assert r.status_code == 400
 
 
 def test_3d_build_revolve_accepts_axis():
-    c = TestClient(server.app)
+    c = client(server.app)
     r = c.post("/api/3d/extrude", json={"op": "revolve", "angle": 360, "axis": 100})
     assert r.status_code == 200
     j = r.json()
@@ -50,41 +83,41 @@ def test_3d_build_revolve_accepts_axis():
 
 
 def test_3d_build_rejects_bad_axis():
-    c = TestClient(server.app)
+    c = client(server.app)
     r = c.post("/api/3d/extrude", json={"op": "revolve", "angle": 360, "axis": "abc"})
     assert r.status_code == 400
 
 
 def test_3d_export_revolve_stl_accepts_axis():
-    c = TestClient(server.app)
+    c = client(server.app)
     r = c.post("/api/3d/export", json={"op": "revolve", "angle": 360, "axis": 50, "format": "stl"})
     assert r.status_code == 200
     assert len(r.content) > 0
 
 
 def test_3d_export_stl():
-    c = TestClient(server.app)
+    c = client(server.app)
     r = c.post("/api/3d/export", json={"depth": 10, "format": "stl"})
     assert r.status_code == 200
     assert len(r.content) > 0
 
 
 def test_3d_export_step():
-    c = TestClient(server.app)
+    c = client(server.app)
     r = c.post("/api/3d/export", json={"depth": 10, "format": "step"})
     assert r.status_code == 200
     assert len(r.content) > 0
 
 
 def test_3d_export_revolve_stl():
-    c = TestClient(server.app)
+    c = client(server.app)
     r = c.post("/api/3d/export", json={"op": "revolve", "angle": 360, "format": "stl"})
     assert r.status_code == 200
     assert len(r.content) > 0
 
 
 def test_3d_build_returns_build123d_flag():
-    c = TestClient(server.app)
+    c = client(server.app)
     r = c.post("/api/3d/extrude", json={"depth": 10})
     assert r.status_code == 200
     j = r.json()
