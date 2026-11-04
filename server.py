@@ -30,13 +30,14 @@ import tempfile
 import time
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile
+from fastapi import Depends, FastAPI, File, Form, Header, HTTPException, Request, UploadFile
 from fastapi.responses import FileResponse, Response
 from fastapi.staticfiles import StaticFiles
 from starlette.background import BackgroundTask
 
 from core import part3d, worker3d
 from core.document import Document, circle, dimension, line, rect, text
+from core.store import store, doc  # single-document store (review.md §6.2 H2)
 from core.export import to_dxf, to_gcode, to_png_pdf, to_svg
 from core.runner import run
 
@@ -63,7 +64,19 @@ async def no_cache(request: Request, call_next):
     response.headers["Cache-Control"] = "no-store"
     return response
 
-doc = Document()
+
+def current_doc(session_id: str | None = Header(default=None, alias="X-Session-Id")) -> Document:
+    """Resolve the document for the active session (review.md §6.2 H2).
+
+    Without an `X-Session-Id` header the shared default document is used, which
+    preserves the original single-document behaviour and the existing tests. A
+    session id routes every document-touching endpoint to an isolated document
+    keyed in `store`, so multiple browser tabs / users no longer share one doc.
+    """
+    return store.get(session_id)
+
+
+# `doc` is the default session document from core/store (review.md §6.2 H2).
 # a little starter scene so the canvas isn't empty
 doc.add(rect(300, 250, 200, 120, fill="#cfe8ff", stroke="#1f6feb", strokeWidth=3,
              meta={"label": "board"}))
@@ -79,12 +92,12 @@ def index():
 
 
 @app.get("/api/doc")
-def get_doc():
+def get_doc(doc: Document = Depends(current_doc)):
     return doc.to_dict()
 
 
 @app.post("/api/objects")
-def post_object(obj: dict):
+def post_object(obj: dict, doc: Document = Depends(current_doc)):
     if "id" not in obj:
         raise HTTPException(400, "object requires an 'id'")
     doc.upsert(obj)
@@ -92,7 +105,7 @@ def post_object(obj: dict):
 
 
 @app.put("/api/objects/{oid}")
-def put_object(oid: str, obj: dict):
+def put_object(oid: str, obj: dict, doc: Document = Depends(current_doc)):
     if doc.find(oid) is None:
         raise HTTPException(404, "object not found")
     obj["id"] = oid
@@ -101,7 +114,7 @@ def put_object(oid: str, obj: dict):
 
 
 @app.delete("/api/objects/{oid}")
-def delete_object(oid: str):
+def delete_object(oid: str, doc: Document = Depends(current_doc)):
     if doc.find(oid) is None:
         raise HTTPException(404, "object not found")
     doc.remove(oid)
@@ -116,13 +129,13 @@ def delete_object(oid: str):
 
 
 @app.post("/api/clear")
-def clear_objects():
+def clear_objects(doc: Document = Depends(current_doc)):
     doc.clear()
     return {"ok": True}
 
 
 @app.post("/api/run")
-def run_code(payload: dict):
+def run_code(payload: dict, doc: Document = Depends(current_doc)):
     code = payload.get("code", "")
     try:
         updated = run(code, doc)
@@ -141,6 +154,7 @@ async def trace_image(
     simplify: float = Form(1.5),
     min_area: float = Form(10.0),
     smooth: bool = Form(False),
+    doc: Document = Depends(current_doc),
 ):
     """Trace an uploaded image into `path` objects.
 
@@ -174,42 +188,42 @@ async def trace_image(
 
 
 @app.put("/api/settings")
-def update_settings(payload: dict):
+def update_settings(payload: dict, doc: Document = Depends(current_doc)):
     for key in ("units", "px_per_unit", "width", "height", "background",
                 "grid_color", "grid_size", "export_grid", "show_grid",
                 "show_rulers", "theme", "recolor_on_theme", "snap_grid",
-                "snap_objects", "snap_page", "layers"):
+                "snap_objects", "snap_page", "layers", "plan"):
         if key in payload:
             setattr(doc, key, payload[key])
     return doc.to_dict()
 
 
 @app.post("/api/doc")
-def replace_doc(payload: dict):
+def replace_doc(payload: dict, doc: Document = Depends(current_doc)):
     """Full document replace (used by the frontend to persist/undo/restore)."""
     doc.load_dict(payload)
     return doc.to_dict()
 
 
 @app.get("/api/export/svg")
-def export_svg():
+def export_svg(doc: Document = Depends(current_doc)):
     return Response(content=to_svg(doc.to_dict()), media_type="image/svg+xml")
 
 
 @app.get("/api/export/png")
-def export_png():
+def export_png(doc: Document = Depends(current_doc)):
     return Response(content=to_png_pdf(doc.to_dict(), "png"),
                     media_type="image/png")
 
 
 @app.get("/api/export/pdf")
-def export_pdf():
+def export_pdf(doc: Document = Depends(current_doc)):
     return Response(content=to_png_pdf(doc.to_dict(), "pdf"),
                     media_type="application/pdf")
 
 
 @app.get("/api/export/dxf")
-def export_dxf():
+def export_dxf(doc: Document = Depends(current_doc)):
     """AutoCAD DXF (R2000) of cuttable outlines, in millimetres."""
     return Response(content=to_dxf(doc.to_dict()), media_type="application/dxf")
 
@@ -220,11 +234,20 @@ def export_gcode(
     plunge: float = 100.0,
     depth: float = -3.0,
     safe: float = 5.0,
+    tool: float = 0.0,
+    pass_depth: float = 0.0,
+    doc: Document = Depends(current_doc),
 ):
-    """Basic profiling G-code (mm) with optional feed/plunge/depth/safe params."""
+    """Basic profiling G-code (mm) with optional feed/plunge/depth/safe params.
+
+    `tool` is the end-mill diameter (mm) — closed outlines are offset by half of
+    it (holes inward) so the cut edge matches the drawing. `pass_depth` is the
+    maximum Z step per roughing pass (0/omitted = single pass).
+    """
     return Response(
         content=to_gcode(doc.to_dict(), feed=feed, plunge=plunge,
-                         depth=depth, safe_z=safe),
+                         depth=depth, safe_z=safe, tool=tool,
+                         pass_depth=pass_depth or None),
         media_type="text/plain",
     )
 
@@ -234,7 +257,7 @@ def export_gcode(
 # The 2D app stays lightweight — build123d is only touched on these routes.
 # --------------------------------------------------------------------------
 
-def _objects_for_ids(ids):
+def _objects_for_ids(doc, ids):
     """Resolve a list of object ids (or None for the whole doc) to objects."""
     if not ids:
         return None  # caller treats None as "use the whole document"
@@ -246,7 +269,7 @@ def _objects_for_ids(ids):
 
 
 @app.post("/api/3d/extrude")
-async def build_3d(payload: dict):
+async def build_3d(payload: dict, doc: Document = Depends(current_doc)):
     """Build a preview mesh from the doc/selection.
 
     Body: {"ids": [..] | null, "op": "extrude" | "revolve",
@@ -279,7 +302,7 @@ async def build_3d(payload: dict):
         if depth <= 0:
             raise HTTPException(400, "depth must be > 0")
     try:
-        objs = _objects_for_ids(ids)
+        objs = _objects_for_ids(doc, ids)
     except HTTPException:
         raise
     try:
@@ -304,8 +327,32 @@ async def build_3d(payload: dict):
     return mesh
 
 
+@app.post("/api/3d/primitive")
+async def primitive_3d(payload: dict):
+    """Return a preview mesh for a generative 3D primitive (box/sphere/...).
+
+    Body: {"kind": "box" | "sphere" | "cylinder" | "cone" | "torus" | "capsule"
+    | "pyramid", "params": {..}, "quality": "low" | "medium" | "high"}. Returns
+    the same triangle-soup JSON as the extrude route so the viewer renders it.
+    """
+    kind = (payload.get("kind") or "").lower()
+    if kind not in part3d.PRIMITIVE_KINDS:
+        raise HTTPException(400, f"unknown primitive '{kind}'")
+    quality = payload.get("quality", "medium")
+    params = payload.get("params") or {}
+    try:
+        mesh = await worker3d.run(part3d.primitive_mesh, kind, params, quality)
+    except worker3d.JobTimeoutError as e:
+        raise HTTPException(504, str(e)) from e
+    except (ValueError, RuntimeError) as e:
+        raise HTTPException(400, str(e)) from e
+    # build123d flag is computed inside the worker and returned on the mesh.
+    mesh["build123d"] = mesh.get("build123d", False)
+    return mesh
+
+
 @app.post("/api/3d/export")
-async def export_3d(payload: dict):
+async def export_3d(payload: dict, doc: Document = Depends(current_doc)):
     """Export the solid as STL (always) or STEP (needs build123d).
 
     Body: {"ids": [..] | null, "op": "extrude" | "revolve", "depth": <mm>,
@@ -315,11 +362,43 @@ async def export_3d(payload: dict):
     a pool of worker *processes* (falling back to a thread) so the server never
     blocks on Open Cascade.
     """
-    ids = payload.get("ids") or None
     fmt = (payload.get("format") or "stl").lower()
-    op = (payload.get("op") or "extrude").lower()
     if fmt not in ("stl", "step"):
         raise HTTPException(400, "format must be 'stl' or 'step'")
+    # Scene merge: a list of {source, transform} items -> one merged file.
+    items = payload.get("items")
+    if items is not None:
+        suffix = "stl" if fmt == "stl" else "step"
+        media = "model/stl" if fmt == "stl" else "application/step"
+        tmp = tempfile.NamedTemporaryFile(delete=False, suffix="." + suffix)
+        tmp.close()
+        path = Path(tmp.name)
+        try:
+            if fmt == "stl":
+                await worker3d.run(
+                    part3d.merge_scene_to_stl, doc.to_dict(), items, str(path)
+                )
+            else:
+                await worker3d.run(
+                    part3d.merge_scene_to_step, doc.to_dict(), items, str(path)
+                )
+        except worker3d.JobTimeoutError as e:
+            path.unlink(missing_ok=True)
+            raise HTTPException(504, str(e)) from e
+        except (ValueError, RuntimeError) as e:
+            path.unlink(missing_ok=True)
+            raise HTTPException(400, str(e)) from e
+        except Exception as e:  # noqa: BLE001
+            path.unlink(missing_ok=True)
+            raise HTTPException(500, f"3D export failed: {e}") from e
+        return FileResponse(
+            path,
+            media_type=media,
+            filename=f"scene.{suffix}",
+            background=BackgroundTask(path.unlink, missing_ok=True),
+        )
+    ids = payload.get("ids") or None
+    op = (payload.get("op") or "extrude").lower()
     if op not in ("extrude", "revolve", "sweep"):
         raise HTTPException(400, "op must be 'extrude', 'revolve' or 'sweep'")
     quality = payload.get("quality", "medium")
@@ -345,7 +424,7 @@ async def export_3d(payload: dict):
         pass
 
     try:
-        objs = _objects_for_ids(ids)
+        objs = _objects_for_ids(doc, ids)
     except HTTPException:
         raise
     respect = objs is None
@@ -420,7 +499,7 @@ def list_projects():
 
 
 @app.post("/api/project/save")
-def save_project(payload: dict):
+def save_project(payload: dict, doc: Document = Depends(current_doc)):
     name = (payload.get("name") or "").strip()
     if not name:
         raise HTTPException(400, "project name required")
@@ -432,7 +511,7 @@ def save_project(payload: dict):
 
 
 @app.post("/api/project/load")
-def load_project(payload: dict):
+def load_project(payload: dict, doc: Document = Depends(current_doc)):
     name = (payload.get("name") or "").strip()
     if not name:
         raise HTTPException(400, "project name required")

@@ -89,11 +89,20 @@ the Fabric CDN under `--virtual-time`.
 Every shape in the document is one dict. Both the backend (`buildFabric` in
 `static/js/sync.js` and the exporters in `export.py`) and the frontend agree on this:
 
+> **Coordinate conventions are now unified (M3, Option B).** Every object carries a
+> meaningful `x,y` centroid origin (centre for rect/circle/text; midpoint /
+> bbox-centre of the absolute geometry for line/dimension/path), so rotation
+> pivots, selection, anchors and bbox are computed uniformly. `line`/`dimension`/
+> `path` still store *absolute* points in `geometry` (authoritative for position);
+> `x,y` is just the origin. `docs/m3-migration.md` records the migration; legacy
+> `./projects/*.json` (which stored `x,y == 0` for those types) are migrated
+> automatically by `Document.load_dict`.
+
 | Field        | Type   | Meaning |
 |--------------|--------|---------|
 | `id`         | str    | Stable uuid; **client-generated** when drawn. |
 | `type`       | enum   | `rect` \| `circle` \| `line` \| `path` \| `text` \| `dimension` \| `connector` |
-| `x`, `y`     | float  | Object origin in canvas px. **Center** for rect/circle/text; line uses absolute endpoints instead. |
+| `x`, `y`     | float  | Object origin in canvas px — a **uniform centroid** for every type (M3): the centre for rect/circle/text, and the midpoint / bbox-centre of the absolute geometry for line/dimension/path. It is the rotation pivot and selection origin; it is *not* authoritative for a line/path/dimension's position (that lives in `geometry`). |
 | `rotation`   | float  | Degrees. |
 | `scaleX`, `scaleY` | float | Scale factors. |
 | `geometry`   | obj    | Type-specific (see below). |
@@ -103,12 +112,13 @@ Every shape in the document is one dict. Both the backend (`buildFabric` in
 `geometry` by type:
 - `rect` → `{ w, h }`
 - `circle` → `{ r }`
-- `line` → `{ x1, y1, x2, y2 }` (absolute; ignores rotation/scale)
-- `path` → `{ d }` (SVG path string, absolute; rotation around `x,y`)
+- `line` → `{ x1, y1, x2, y2 }` (absolute; `x,y` is the centroid origin; ignores rotation/scale)
+- `path` → `{ d }` (SVG path string, absolute; `x,y` is the bbox-centre origin)
 - `text` → `{ text, fontSize }`
 - `dimension` → `{ x1, y1, x2, y2, offset }` (measured span + perpendicular
   offset of the dimension line; label is generated from the document units at
-  render/export time — do **not** bake a length into the schema)
+  render/export time — do **not** bake a length into the schema; `x,y` is the
+  measured-segment midpoint)
 - `connector` → `{ from: {id, anchor}, to: {id, anchor} }` (semantic link between
   two objects; `anchor` ∈ `center`/`left`/`right`/`top`/`bottom`). The line is
   **derived** from the referenced objects' bounding geometry, so it follows them
@@ -223,14 +233,21 @@ preserved there).
 | PUT    | `/api/settings` | Update `units` / `px_per_unit` / `width` / `height` / `background` / `grid_color` / `grid_size` / `export_grid` / `show_grid` / `show_rulers` / `theme` / `recolor_on_theme` / `layers`. |
 | GET    | `/api/export/svg` \| `/png` \| `/pdf` | Export current doc (pixel-space). |
 | GET    | `/api/export/dxf` | Export current doc as AutoCAD R2000 DXF (mm, y-up: cuttable outlines). |
-| GET    | `/api/export/gcode` | Export current doc as profiling G-code (mm) with query params `feed` / `plunge` / `depth` / `safe`. |
+| GET    | `/api/export/gcode` | Export current doc as profiling G-code (mm) with query params `feed` / `plunge` / `depth` / `safe` / `tool` (end-mill diameter; offsets closed outlines so the cut edge matches the drawing, holes inward) / `pass_depth` (max Z step per roughing pass; 0/omitted = single pass). |
 | POST   | `/api/doc` | Full document replace (used by frontend persist / undo / restore). |
 | GET    | `/api/projects` | List saved named project files (M5). |
 | POST   | `/api/project/save` | Save current doc to `./projects/<name>.json` (M5). |
 | POST   | `/api/project/load` | Load a named project into the doc (M5). |
 | DELETE | `/api/project/{name}` | Delete a saved project (M5). |
 
-The live document is a **module-level `doc` in `server.py`** (in-memory).
+The live document is rooted in **`core/store.py`'s `DocStore`** (H2,
+review.md §6.2) and exposed through `server.py` as the module-level `doc`.
+Every document-touching endpoint now resolves its document via a `current_doc`
+dependency that reads an optional `X-Session-Id` header: requests **without**
+that header use the shared default document (preserving the original
+single-document behaviour), while a session id routes them to an isolated
+document keyed in the store. This lets multiple browser tabs / users keep
+separate in-memory documents without reworking every endpoint.
 Named projects persist to `./projects/*.json` (M5); the frontend also mirrors
 the current canvas into `localStorage` so a reload survives even a server
 restart. `Document.load_dict()` replaces the whole doc from a saved dict.
@@ -298,9 +315,15 @@ Canny-style lines). `smooth=true` emits cubic Bézier `C` segments (Catmull-Rom)
 ## Gotchas
 - **matplotlib** runs with the `Agg` backend (headless). Don't remove the
   `matplotlib.use("Agg")` line in `export.py`.
-- **The console is not sandboxed.** `runner.py` restricts builtins but executes
-  arbitrary code in-process. Acceptable for local single-user use; do **not**
-  expose `/api/run` to untrusted networks without a real sandbox.
+- **The console is AST-sandboxed (H1, review.md §6.2).** `runner.py` parses the
+  user script and rejects imports, `global`/`nonlocal`, *any* dunder attribute
+  access (this closes the `().__class__.__subclasses__()` style escape that a
+  mere restricted-builtins map leaves open), and calls to names that aren't a
+  console helper, a safe builtin, or defined by the script itself — *before*
+  anything reaches `exec`. It is still meant for a local single-user DIY tool,
+  not hostile multi-user input, but the trivial `exec`-escape is gone. A
+  Pyodide-in-browser variant remains a future option only if the project's
+  no-CDN/offline rule is ever relaxed.
 - **Console runs are transactional.** `runner.run()` deep-copies the document
   before `exec` and restores it via `load_dict` if the script raises, so a
   script that errors part-way through can't leave the document half-mutated.
@@ -311,8 +334,9 @@ Canny-style lines). `smooth=true` emits cubic Bézier `C` segments (Catmull-Rom)
   `meta["layer"]` to every object that lacks a valid layer (older project files
   and any object referencing a deleted layer resolve to the base layer). A fresh
   `Document` starts with one `"layer-base"`; `to_dict()` includes the `layers`
-  list. Note: there is **no Layers panel in the UI yet** — the data model is
-  ahead of the UI/docs (see `docs/review.md` §3.7).
+  list. The Layers panel (`static/js/layers.js`) and this schema section already
+  document the feature end-to-end, so the earlier "data model ahead of the
+  docs" gap is resolved (see `docs/review.md` §6.1).
 - **Line/path** store absolute geometry with an identity transform. `toCanonical`
   bakes moves/scales/rotations into the endpoints/`d`, so the canonical dict is
   always the final geometry. If you add transforms that must stay live, extend

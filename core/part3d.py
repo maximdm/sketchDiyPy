@@ -704,3 +704,421 @@ def sweep_to_mesh(doc, objects=None, accurate=True, quality="medium"):
         "repaired": 0,
         "watertight": None,
     }
+
+
+# --------------------------------------------------------------------------
+# Generative 3D primitives
+# --------------------------------------------------------------------------
+# A library of standalone solids the user can drop straight into the 3D scene
+# without drawing a 2D profile first. Each has pure-Python mesh generation (so
+# a preview + STL export work with no extra dependencies) and, when build123d is
+# present, an exact CSG solid for accurate tessellation and STEP export.
+
+PRIMITIVE_KINDS = ("box", "sphere", "cylinder", "cone", "torus", "capsule",
+                   "pyramid")
+PRIMITIVE_DEFAULTS = {
+    "box": {"w": 40.0, "h": 40.0, "d": 40.0},
+    "sphere": {"r": 25.0},
+    "cylinder": {"r": 20.0, "h": 40.0},
+    "cone": {"r": 20.0, "h": 40.0},
+    "torus": {"R": 30.0, "r": 10.0},
+    "capsule": {"r": 15.0, "h": 30.0},
+    "pyramid": {"w": 40.0, "h": 40.0},
+}
+# Frontend rendering hints: ordered (param, label) pairs.
+PRIMITIVE_PARAM_SPECS = {
+    "box": [("w", "Width"), ("h", "Height"), ("d", "Depth")],
+    "sphere": [("r", "Radius")],
+    "cylinder": [("r", "Radius"), ("h", "Height")],
+    "cone": [("r", "Radius"), ("h", "Height")],
+    "torus": [("R", "Major R"), ("r", "Minor R")],
+    "capsule": [("r", "Radius"), ("h", "Height")],
+    "pyramid": [("w", "Base"), ("h", "Height")],
+}
+
+
+def _seg(quality, base=32):
+    q = (quality or "medium").lower()
+    if q == "low":
+        return max(8, base // 2)
+    if q == "high":
+        return base * 2
+    return base
+
+
+def _box(w, h, d):
+    x, y, z = w / 2, h / 2, d / 2
+    v = [(-x, -y, -z), (x, -y, -z), (x, y, -z), (-x, y, -z),
+         (-x, -y, z), (x, -y, z), (x, y, z), (-x, y, z)]
+    faces = [(0, 1, 2), (0, 2, 3), (4, 6, 5), (4, 7, 6),
+             (0, 5, 1), (0, 4, 5), (2, 6, 7), (2, 7, 3),
+             (3, 7, 4), (3, 4, 0), (1, 5, 6), (1, 6, 2)]
+    positions = [c for p in v for c in p]
+    indices = [i for f in faces for i in f]
+    return positions, indices
+
+
+def _sphere(r, seg):
+    positions, indices = [], []
+    stack = seg
+    for i in range(stack + 1):
+        phi = math.pi * i / stack
+        for j in range(seg + 1):
+            theta = 2 * math.pi * j / seg
+            positions.extend((r * math.sin(phi) * math.cos(theta),
+                              r * math.sin(phi) * math.sin(theta),
+                              r * math.cos(phi)))
+    idx = lambda i, j: i * (seg + 1) + j
+    for i in range(stack):
+        for j in range(seg):
+            a, b, c, d = idx(i, j), idx(i + 1, j), idx(i + 1, j + 1), idx(i, j + 1)
+            indices.extend((a, b, d, b, c, d))
+    return positions, indices
+
+
+def _cylinder(r, h, seg):
+    z0, z1 = -h / 2, h / 2
+    positions, indices = [], []
+    for j in range(seg):
+        a0, a1 = 2 * math.pi * j / seg, 2 * math.pi * (j + 1) / seg
+        x0, y0, x1, y1 = r * math.cos(a0), r * math.sin(a0), r * math.cos(a1), r * math.sin(a1)
+        base = len(positions) // 3
+        positions.extend((x0, y0, z0, x1, y1, z0, x1, y1, z1, x0, y0, z1))
+        indices.extend((base, base + 1, base + 2, base, base + 2, base + 3))
+    ctop = len(positions) // 3
+    positions.extend((0, 0, z1))
+    for j in range(seg):
+        a0, a1 = 2 * math.pi * j / seg, 2 * math.pi * (j + 1) / seg
+        base = len(positions) // 3
+        positions.extend((r * math.cos(a0), r * math.sin(a0), z1,
+                          r * math.cos(a1), r * math.sin(a1), z1))
+        indices.extend((ctop, base, base + 1))
+    cbot = len(positions) // 3
+    positions.extend((0, 0, z0))
+    for j in range(seg):
+        a0, a1 = 2 * math.pi * j / seg, 2 * math.pi * (j + 1) / seg
+        base = len(positions) // 3
+        positions.extend((r * math.cos(a0), r * math.sin(a0), z0,
+                          r * math.cos(a1), r * math.sin(a1), z0))
+        indices.extend((cbot, base + 1, base))
+    return positions, indices
+
+
+def _cone(r, h, seg):
+    z0, z1 = -h / 2, h / 2
+    positions, indices = [], []
+    for j in range(seg):
+        a0, a1 = 2 * math.pi * j / seg, 2 * math.pi * (j + 1) / seg
+        x0, y0, x1, y1 = r * math.cos(a0), r * math.sin(a0), r * math.cos(a1), r * math.sin(a1)
+        base = len(positions) // 3
+        positions.extend((x0, y0, z0, x1, y1, z0, 0, 0, z1))
+        indices.extend((base, base + 1, base + 2))
+    cbot = len(positions) // 3
+    positions.extend((0, 0, z0))
+    for j in range(seg):
+        a0, a1 = 2 * math.pi * j / seg, 2 * math.pi * (j + 1) / seg
+        base = len(positions) // 3
+        positions.extend((r * math.cos(a0), r * math.sin(a0), z0,
+                          r * math.cos(a1), r * math.sin(a1), z0))
+        indices.extend((cbot, base + 1, base))
+    return positions, indices
+
+
+def _torus(R, r, segU, segV):
+    positions, indices = [], []
+    for i in range(segU):
+        u = 2 * math.pi * i / segU
+        for k in range(segV):
+            v = 2 * math.pi * k / segV
+            positions.extend(((R + r * math.cos(v)) * math.cos(u),
+                              (R + r * math.cos(v)) * math.sin(u),
+                              r * math.sin(v)))
+    idx = lambda i, k: i * segV + k
+    for i in range(segU):
+        for k in range(segV):
+            a = idx(i, k)
+            b = idx((i + 1) % segU, k)
+            c = idx((i + 1) % segU, (k + 1) % segV)
+            d = idx(i, (k + 1) % segV)
+            indices.extend((a, b, d, b, c, d))
+    return positions, indices
+
+
+def _capsule(r, h, seg):
+    positions, indices = [], []
+
+    def hemisphere(cz, sign):
+        stack = max(4, seg // 2)
+        start = len(positions) // 3
+        for i in range(stack + 1):
+            phi = math.pi / 2 * i / stack
+            zoff = sign * r * math.sin(phi)
+            ring = r * math.cos(phi)
+            for j in range(seg):
+                a = 2 * math.pi * j / seg
+                positions.extend((ring * math.cos(a), ring * math.sin(a), cz + zoff))
+        idx = lambda i, j: start + i * seg + j
+        for i in range(stack):
+            for j in range(seg):
+                a, b, c, d = idx(i, j), idx(i + 1, j), idx(i + 1, j + 1), idx(i, j + 1)
+                if sign > 0:
+                    indices.extend((a, b, d, b, c, d))
+                else:
+                    indices.extend((a, d, b, b, d, c))
+
+    zc0, zc1 = -h / 2, h / 2
+    for j in range(seg):
+        a0, a1 = 2 * math.pi * j / seg, 2 * math.pi * (j + 1) / seg
+        x0, y0, x1, y1 = r * math.cos(a0), r * math.sin(a0), r * math.cos(a1), r * math.sin(a1)
+        base = len(positions) // 3
+        positions.extend((x0, y0, zc0, x1, y1, zc0, x1, y1, zc1, x0, y0, zc1))
+        indices.extend((base, base + 1, base + 2, base, base + 2, base + 3))
+    hemisphere(zc1, 1)
+    hemisphere(zc0, -1)
+    return positions, indices
+
+
+def _pyramid(w, h):
+    x = w / 2
+    base = [(-x, -x, -h / 2), (x, -x, -h / 2), (x, x, -h / 2), (-x, x, -h / 2)]
+    apex = (0, 0, h / 2)
+    positions, indices = [], []
+    b = [len(positions) // 3 + i for i, p in enumerate(base)]
+    positions.extend(apex)
+    apex_i = len(positions) // 3 - 1
+    indices.extend((b[0], b[2], b[1], b[0], b[3], b[2]))
+    for i in range(4):
+        j = (i + 1) % 4
+        indices.extend((b[i], apex_i, b[j]))
+    return positions, indices
+
+
+def primitive_mesh(kind, params=None, quality="medium"):
+    """Return a preview mesh dict for a generative 3D primitive.
+
+    Uses build123d tessellation when available (accurate curved surfaces),
+    otherwise the pure-Python mesh generator. Always returns a mesh dict in the
+    same shape as the extrude/revolve routes so the 3D viewer can render it.
+    """
+    if kind not in PRIMITIVE_KINDS:
+        raise ValueError(f"unknown primitive '{kind}'")
+    p = dict(PRIMITIVE_DEFAULTS.get(kind, {}))
+    if params:
+        p.update({k: float(v) for k, v in params.items() if k in p})
+    seg = _seg(quality)
+    if kind == "box":
+        pos, idx = _box(p["w"], p["h"], p["d"])
+    elif kind == "sphere":
+        pos, idx = _sphere(p["r"], max(8, seg))
+    elif kind == "cylinder":
+        pos, idx = _cylinder(p["r"], p["h"], max(8, seg))
+    elif kind == "cone":
+        pos, idx = _cone(p["r"], p["h"], max(8, seg))
+    elif kind == "torus":
+        pos, idx = _torus(p["R"], p["r"], max(8, seg), max(6, seg // 2))
+    elif kind == "capsule":
+        pos, idx = _capsule(p["r"], p["h"], max(8, seg))
+    elif kind == "pyramid":
+        pos, idx = _pyramid(p["w"], p["h"])
+    else:
+        raise ValueError(f"unknown primitive '{kind}'")
+
+    used_accurate = False
+    if available():
+        try:
+            solid = primitive_to_solid(kind, p)
+            pos2, idx2 = tessellate_solid(solid, _quality_params(quality)[0])
+            if pos2:
+                pos, idx = pos2, idx2
+                used_accurate = True
+        except Exception:
+            pass
+
+    return {
+        "positions": pos,
+        "indices": idx,
+        "bbox": _bbox(pos),
+        "accurate": used_accurate,
+        "triangles": len(idx) // 3,
+        "op": "primitive",
+        "kind": kind,
+        "params": p,
+        "build123d": available(),
+        "trimesh": False,
+        "repaired": 0,
+        "watertight": None,
+    }
+
+
+def primitive_to_solid(kind, params):
+    """Build an exact build123d solid for the primitive (STEP export, accurate).
+
+    Raises RuntimeError if build123d is unavailable; the caller falls back to the
+    pure-Python mesh. The pyramid is stitched from its 5 corner faces because
+    build123d has no dedicated square-pyramid primitive.
+    """
+    if not available():
+        raise RuntimeError("build123d is not installed")
+    from build123d import (Box, Sphere, Cylinder, Cone, Torus, Vector,
+                           Shell, Wire, Face, Solid)
+    p = dict(PRIMITIVE_DEFAULTS.get(kind, {}))
+    p.update({k: float(v) for k, v in (params or {}).items() if k in p})
+    if kind == "box":
+        return Box(p["w"], p["h"], p["d"])
+    if kind == "sphere":
+        return Sphere(p["r"])
+    if kind == "cylinder":
+        return Cylinder(p["r"], p["h"])
+    if kind == "cone":
+        return Cone(p["r"], 0.0, p["h"])
+    if kind == "torus":
+        return Torus(p["R"], p["r"])
+    if kind == "capsule":
+        r, h = p["r"], p["h"]
+        return (Cylinder(r, h)
+                + Sphere(r).translate(Vector(0, 0, h / 2))
+                + Sphere(r).translate(Vector(0, 0, -h / 2)))
+    if kind == "pyramid":
+        w, h = p["w"], p["h"]
+        x = w / 2
+        verts = [Vector(-x, -x, -h / 2), Vector(x, -x, -h / 2),
+                 Vector(x, x, -h / 2), Vector(-x, x, -h / 2), Vector(0, 0, h / 2)]
+        apex = verts[4]
+        faces = [Face(Wire.make_polygon([verts[0], verts[1], verts[2], verts[3], verts[0]]))]
+        for i in range(4):
+            j = (i + 1) % 4
+            faces.append(Face(Wire.make_polygon([verts[i], verts[j], apex, verts[i]])))
+        return Solid(Shell(faces))
+    raise ValueError(f"unknown primitive '{kind}'")
+
+
+# --------------------------------------------------------------------------
+# Scene export: merge several items (primitives + 2D-builds) into one file
+# --------------------------------------------------------------------------
+
+def _resolve_objs(doc, ids):
+    """Resolve object ids to a list of canonical objects (or None = whole doc)."""
+    if hasattr(doc, "to_dict"):
+        doc = doc.to_dict()
+    if not ids:
+        return None
+    by_id = {o["id"]: o for o in doc["objects"]}
+    objs = [by_id[i] for i in ids if i in by_id]
+    return objs or None
+
+
+def _apply_transform(positions, transform):
+    """Apply a per-item transform (scale, euler XYZ rotation deg, translation mm)."""
+    if not transform:
+        return positions
+    pos = transform.get("pos") or {"x": 0, "y": 0, "z": 0}
+    rot = transform.get("rot") or {"x": 0, "y": 0, "z": 0}
+    sc = transform.get("scale", 1) or 1
+    if isinstance(sc, dict):
+        sxs, sys_, szs = sc.get("x", 1), sc.get("y", 1), sc.get("z", 1)
+    else:
+        sxs = sys_ = szs = sc
+    rx, ry, rz = math.radians(rot.get("x", 0)), math.radians(rot.get("y", 0)), math.radians(rot.get("z", 0))
+    cx, sxr = math.cos(rx), math.sin(rx)
+    cy, syr = math.cos(ry), math.sin(ry)
+    cz, szr = math.cos(rz), math.sin(rz)
+    px, py, pz = pos.get("x", 0), pos.get("y", 0), pos.get("z", 0)
+    out = []
+    for i in range(0, len(positions), 3):
+        x, y, z = positions[i] * sxs, positions[i + 1] * sys_, positions[i + 2] * szs
+        y, z = y * cx - z * sxr, y * sxr + z * cx          # rot X
+        x, z = x * cy + z * syr, -x * syr + z * cy          # rot Y
+        x, y = x * cz - y * szr, x * szr + y * cz           # rot Z
+        out.extend((x + px, y + py, z + pz))
+    return out
+
+
+def scene_item_mesh(doc, item):
+    """Return (positions, indices) for one scene item, transformed into place."""
+    src = item.get("source", {})
+    quality = src.get("quality", "medium")
+    if src.get("type") == "primitive":
+        m = primitive_mesh(src.get("kind"), src.get("params", {}), quality)
+    else:
+        op = (src.get("op") or "extrude").lower()
+        objs = _resolve_objs(doc, src.get("ids"))
+        if op == "revolve":
+            m = revolve_to_mesh(doc, objs, src.get("angle", 360), src.get("axis"),
+                                True, quality)
+        elif op == "sweep":
+            m = sweep_to_mesh(doc, objs, True, quality)
+        else:
+            m = extrude_to_mesh(doc, objs, src.get("depth", 10), True, quality)
+    positions = list(m["positions"])
+    # Centre the geometry on its own centroid so per-item transforms rotate about
+    # the item's centre — matching exactly how the viewer places each item.
+    if positions:
+        n = len(positions) // 3
+        c = [sum(positions[i * 3 + k] for i in range(n)) / n for k in range(3)]
+        positions = [positions[i] - c[i % 3] for i in range(len(positions))]
+    pos = _apply_transform(positions, item.get("transform"))
+    return pos, m["indices"]
+
+
+def merge_scene_to_stl(doc, items, path):
+    """Write all scene items as one merged ASCII STL (always available)."""
+    positions, indices = [], []
+    for it in items:
+        pos, idx = scene_item_mesh(doc, it)
+        base = len(positions) // 3
+        positions.extend(pos)
+        indices.extend(base + i for i in idx)
+    positions, indices, _ = sanitize_mesh(positions, indices)
+    write_stl_ascii(positions, indices, path)
+    return {"triangles": len(indices) // 3}
+
+
+def _transform_solid(solid, transform):
+    """Apply a scene-item transform to a build123d solid (for STEP export)."""
+    if not transform:
+        return solid
+    from build123d import Vector, Axis
+    pos = transform.get("pos") or {"x": 0, "y": 0, "z": 0}
+    rot = transform.get("rot") or {"x": 0, "y": 0, "z": 0}
+    sc = transform.get("scale", 1) or 1
+    try:
+        if sc and sc != 1:
+            if isinstance(sc, dict):
+                if sc.get("x", 1) != 1 or sc.get("y", 1) != 1 or sc.get("z", 1) != 1:
+                    solid = solid.scale((sc.get("x", 1), sc.get("y", 1), sc.get("z", 1)))
+            else:
+                solid = solid.scale(sc)
+    except Exception:
+        pass
+    if rot.get("z", 0):
+        solid = solid.rotate(Axis(Vector(0, 0, 0), Vector(0, 0, 1)), rot["z"])
+    if rot.get("y", 0):
+        solid = solid.rotate(Axis(Vector(0, 0, 0), Vector(0, 1, 0)), rot["y"])
+    if rot.get("x", 0):
+        solid = solid.rotate(Axis(Vector(0, 0, 0), Vector(1, 0, 0)), rot["x"])
+    px, py, pz = pos.get("x", 0), pos.get("y", 0), pos.get("z", 0)
+    if px or py or pz:
+        solid = solid.translate(Vector(px, py, pz))
+    return solid
+
+
+def merge_scene_to_step(doc, items, path):
+    """Build + fuse every scene item's solid and export as STEP (needs build123d)."""
+    if not available():
+        raise RuntimeError("STEP export needs build123d (pip install build123d)")
+    solids = []
+    for it in items:
+        src = it.get("source", {})
+        if src.get("type") == "primitive":
+            s = primitive_to_solid(src.get("kind"), src.get("params", {}))
+        else:
+            op = (src.get("op") or "extrude").lower()
+            objs = _resolve_objs(doc, src.get("ids"))
+            outlines = doc_cut_outlines_mm(doc, objs, respect_visibility=objs is None)
+            s = build_solid(outlines, op, src.get("depth", 10), src.get("angle", 360),
+                           src.get("axis"), src.get("quality", "medium"))
+        solids.append(_transform_solid(s, it.get("transform")))
+    fused = solids[0]
+    for s in solids[1:]:
+        fused = fused + s
+    write_step(fused, path)

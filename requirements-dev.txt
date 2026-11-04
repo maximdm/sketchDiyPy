@@ -6,6 +6,12 @@
 
 -r requirements-3d.txt
 
+# Test deps are kept OUT of the lightweight base install (review.md §6.4 L1):
+# the fast `pip install -r requirements.txt` stays dependency-light and lets the
+# 2D app boot without pulling in the test toolchain.
+pytest
+httpx
+
 # Playwright is only needed for the optional UI smoke test; the rest of the
 # suite runs without it.
 playwright

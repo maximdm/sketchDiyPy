@@ -26,6 +26,7 @@ export const state = {
   snapGuides: { xs: [], ys: [] }, // alignment guide lines shown while dragging
   histIndex: -1, // undo/redo pointer
   commitTimer: null, // debounce handle for scheduleCommit
+  projectName: "", // name of the project these notes/plan belong to (set on save/load)
 };
 
 export const $ = (id) => document.getElementById(id);

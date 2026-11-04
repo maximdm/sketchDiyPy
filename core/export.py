@@ -95,7 +95,9 @@ def _path_bbox(d: str):
     """Centre + half-extents of an SVG path 'd' (numbers paired as x,y)."""
     if not d:
         return None
-    verts, _ = _parse_path(d)
+    from core.pathgeom import path_vertices
+
+    verts = path_vertices(d)
     if not verts:
         return None
     xs = [v[0] for v in verts]
@@ -667,8 +669,77 @@ def _dxf_grid_entities(doc: dict):
     return ents
 
 
-def to_dxf(doc: dict, circle_seg: int = 64, with_grid: bool | None = None) -> str:
-    """Minimal AutoCAD R2000 DXF (LWPOLYLINE entities) in millimetres."""
+def _to_dxf_ezdxf(doc: dict, circle_seg: int = 64, with_grid: bool | None = None):
+    """Optional ezdxf-backed DXF writer (review.md §6.3 M1).
+
+    Used only when `ezdxf` is installed; falls back to the hand-rolled writer
+    otherwise. Returns the DXF text, or ``None`` if ezdxf is unavailable or the
+    write failed (so the caller can fall back safely).
+    """
+    try:
+        import ezdxf
+    except Exception:  # noqa: BLE001 - optional dependency
+        return None
+    try:
+        from io import BytesIO
+
+        insunits = {"mm": 4, "cm": 5, "inch": 1}.get(doc.get("units", "mm"), 4)
+        dxf = ezdxf.new("R2000")
+        dxf.header["$INSUNITS"] = insunits
+        msp = dxf.modelspace()
+        by_id = {o["id"]: o for o in doc["objects"]}
+        if with_grid is None:
+            with_grid = bool(doc.get("export_grid", False))
+        if with_grid:
+            dxf.layers.add("GRID", color=7)
+        for o in doc["objects"]:
+            if not _layer_visible(doc, o):
+                continue
+            for pl in _cut_polylines(o, doc, by_id, circle_seg):
+                pts = [
+                    tuple(round(v, 4) for v in _to_mm(doc, px, py))
+                    for px, py in pl["pts"]
+                ]
+                if len(pts) < 2:
+                    continue
+                msp.add_lwpolyline(
+                    pts, dxfattribs={"layer": "0"}, close=bool(pl["closed"])
+                )
+        if with_grid:
+            s = _scale_mm(doc)
+            if s > 0:
+                w_mm, h_mm = doc["width"] / s, doc["height"] / s
+                size_mm = max(0.5, min(2000.0, (doc.get("grid_size", 20) or 20) / s))
+                x = 0.0
+                while x <= w_mm + 1e-6:
+                    msp.add_lwpolyline(
+                        [(x, 0.0), (x, h_mm)], dxfattribs={"layer": "GRID"}
+                    )
+                    x += size_mm
+                y = 0.0
+                while y <= h_mm + 1e-6:
+                    msp.add_lwpolyline(
+                        [(0.0, y), (w_mm, y)], dxfattribs={"layer": "GRID"}
+                    )
+                    y += size_mm
+        buf = BytesIO()
+        dxf.write(buf)
+        return buf.getvalue().decode("ascii", errors="replace")
+    except Exception:  # noqa: BLE001 - if ezdxf path fails, fall back
+        return None
+
+
+def to_dxf(doc: dict, circle_seg: int = 64, with_grid: bool | None = None,
+           use_ezdxf: bool = True) -> str:
+    """Minimal AutoCAD R2000 DXF (LWPOLYLINE entities) in millimetres.
+
+    When `ezdxf` is installed and `use_ezdxf` is true, a more robust writer is
+    used (review.md §6.3 M1); otherwise the built-in hand-rolled writer runs.
+    """
+    if use_ezdxf:
+        alt = _to_dxf_ezdxf(doc, circle_seg, with_grid)
+        if alt is not None:
+            return alt
     insunits = {"mm": 4, "cm": 5, "inch": 1}.get(doc.get("units", "mm"), 4)
     grid = with_grid if with_grid is not None else bool(doc.get("export_grid", False))
     by_id = {o["id"]: o for o in doc["objects"]}
@@ -740,23 +811,92 @@ def _gcode_grid(doc: dict, safe_z: float) -> list:
     return lines
 
 
+def _polygon_signed_area(pts):
+    """Signed area of a closed polygon (positive => counter-clockwise)."""
+    a = 0.0
+    n = len(pts)
+    for i in range(n):
+        x1, y1 = pts[i]
+        x2, y2 = pts[(i + 1) % n]
+        a += x1 * y2 - x2 * y1
+    return a / 2.0
+
+
+def _point_in_polygon(p, poly):
+    """Ray-casting point-in-polygon test (p = (x, y))."""
+    x, y = p
+    inside = False
+    n = len(poly)
+    for i in range(n):
+        x1, y1 = poly[i]
+        x2, y2 = poly[(i + 1) % n]
+        if ((y1 > y) != (y2 > y)) and (
+            x < (x2 - x1) * (y - y1) / (y2 - y1) + x1
+        ):
+            inside = not inside
+    return inside
+
+
+def _offset_closed_polygon(pts, r):
+    """Offset a closed polygon's vertices outward (r > 0) or inward (r < 0).
+
+    Uses the per-vertex edge-normal bisector, oriented away from the centroid so
+    it works for either winding. Robust for convex outlines; concave ones can
+    self-intersect at tight notches — acceptable for a first-pass tool
+    compensation (review.md §6.2 H3).
+    """
+    if len(pts) < 3 or r == 0:
+        return pts
+    n = len(pts)
+    cx = sum(p[0] for p in pts) / n
+    cy = sum(p[1] for p in pts) / n
+    out = []
+    for i in range(n):
+        prev = pts[(i - 1) % n]
+        cur = pts[i]
+        nxt = pts[(i + 1) % n]
+        e1 = (cur[0] - prev[0], cur[1] - prev[1])
+        e2 = (nxt[0] - cur[0], nxt[1] - cur[1])
+        # edge normals (rotate +90: (dx, dy) -> (-dy, dx)), averaged at the vertex
+        n1 = (-e1[1], e1[0])
+        n2 = (-e2[1], e2[0])
+        nx, ny = n1[0] + n2[0], n1[1] + n2[1]
+        ln = math.hypot(nx, ny)
+        if ln < 1e-9:
+            out.append(cur)
+            continue
+        nx, ny = nx / ln, ny / ln
+        # flip the bisector normal to point away from the centroid (outward)
+        if (nx * (cur[0] - cx) + ny * (cur[1] - cy)) < 0:
+            nx, ny = -nx, -ny
+        out.append((cur[0] + nx * r, cur[1] + ny * r))
+    return out
+
+
 def to_gcode(doc: dict, feed: float = 300.0, plunge: float = 100.0,
              depth: float = -3.0, safe_z: float = 5.0, circle_seg: int = 64,
-             with_grid: bool | None = None) -> str:
+             with_grid: bool | None = None, tool: float = 0.0,
+             pass_depth: float | None = None) -> str:
     """Basic profiling G-code: rapid to each outline, plunge, cut the perimeter.
 
     With the grid-export option on, the drafting grid is appended as a non-cutting
     rapid (G0) reference pass at the safe Z height.
+
+    Maker improvements (review.md §6.2 H3):
+      * ``tool`` — end-mill **diameter** in mm. Closed outlines are offset by
+        half the diameter so the cut edge, not the centreline, matches the drawn
+        shape; holes (closed outlines inside another) are offset inward.
+        ``tool=0`` (default) keeps the legacy centreline behaviour.
+      * ``pass_depth`` — maximum Z step per roughing pass. When the total
+        ``depth`` exceeds it, the perimeter is cut in several stepped passes
+        instead of one deep plunge. Defaults to a single pass (``|depth|``).
     """
     grid = with_grid if with_grid is not None else bool(doc.get("export_grid", False))
     by_id = {o["id"]: o for o in doc["objects"]}
-    L = [
-        "; sketchDiy G-code export (mm, absolute)",
-        "G21 ; millimetres",
-        "G90 ; absolute positioning",
-        "G17 ; XY plane",
-        f"G0 Z{safe_z:.3f}",
-    ]
+
+    # Collect visible cut polylines in millimetres up front so we can detect
+    # holes (for inward tool compensation) before emitting.
+    outlines = []
     for o in doc["objects"]:
         if not _layer_visible(doc, o):
             continue
@@ -764,10 +904,44 @@ def to_gcode(doc: dict, feed: float = 300.0, plunge: float = 100.0,
             pts = [_to_mm(doc, px, py) for px, py in pl["pts"]]
             if len(pts) < 2:
                 continue
-            x0, y0 = pts[0]
-            L.append(f"G0 X{x0:.3f} Y{y0:.3f}")
-            L.append(f"G1 Z{depth:.3f} F{plunge:.1f}")
-            seq = pts[1:] + (pts[:1] if pl["closed"] else [])
+            outlines.append({"pts": pts, "closed": pl["closed"]})
+
+    # Hole detection: a closed outline whose centroid lies inside another closed
+    # outline is treated as a hole and offset inward.
+    r = abs(tool) / 2.0
+    if r > 0:
+        closed = [ol for ol in outlines if ol["closed"] and len(ol["pts"]) >= 3]
+        for ol in closed:
+            cx = sum(p[0] for p in ol["pts"]) / len(ol["pts"])
+            cy = sum(p[1] for p in ol["pts"]) / len(ol["pts"])
+            is_hole = any(
+                other is not ol
+                and other["closed"]
+                and _point_in_polygon((cx, cy), other["pts"])
+                for other in closed
+            )
+            ol["pts"] = _offset_closed_polygon(ol["pts"], -r if is_hole else r)
+
+    L = [
+        "; sketchDiy G-code export (mm, absolute)",
+        "G21 ; millimetres",
+        "G90 ; absolute positioning",
+        "G17 ; XY plane",
+        f"G0 Z{safe_z:.3f}",
+    ]
+    cut_depth = abs(depth)
+    pd = pass_depth if pass_depth and pass_depth > 0 else cut_depth
+    n_passes = max(1, math.ceil(cut_depth / pd)) if cut_depth > 0 else 1
+    for ol in outlines:
+        pts = ol["pts"]
+        if len(pts) < 2:
+            continue
+        x0, y0 = pts[0]
+        L.append(f"G0 X{x0:.3f} Y{y0:.3f}")
+        for k in range(1, n_passes + 1):
+            z = -min(k * pd, cut_depth)
+            L.append(f"G1 Z{z:.3f} F{plunge:.1f}")
+            seq = pts[1:] + (pts[:1] if ol["closed"] else [])
             for (x, y) in seq:
                 L.append(f"G1 X{x:.3f} Y{y:.3f} F{feed:.1f}")
             L.append(f"G0 Z{safe_z:.3f}")

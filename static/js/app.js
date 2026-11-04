@@ -17,6 +17,9 @@ import "./tools.js";   // dimension/connector tools, snapping, align, delete, ru
 import "./console.js"; // Python console + template gallery
 import "./trace.js";   // image -> paths
 import "./threed.js";   // 3D extrude panel + viewer
+import "./view.js";     // workspace tabs (2D Design / 3D Model / Plan) + 3D context panel
+import "./plan.js";      // Plan workspace (shopping list + assembly steps)
+import "./menu.js";       // top menu bar (Shapes / Materials / Tools / Edit)
 import { boot } from "./persistence.js";
 
 boot();

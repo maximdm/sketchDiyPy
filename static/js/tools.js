@@ -536,30 +536,40 @@ canvas.on("object:modified", (e) => {
   scheduleCommit();
 });
 
-function deleteSelected() {
-  const objs = activeOnes();
-  if (!objs.length) return;
-  const active = canvas.getActiveObject();
-  if (active && active.type === "activeSelection") canvas.discardActiveObject();
-  state.suppressSync = true;
-  objs.forEach((o) => {
-    // Cascade-delete connectors that reference this object.
+// Delete a single object, cascading any connectors that reference it.
+export function eraseTarget(o) {
+  if (!o) return;
+  const id = o.id;
+  if (id) {
     const connIds = canvas.getObjects()
       .filter((c) => c._isConnector &&
-              (c._connectorRef.from.id === o.id || c._connectorRef.to.id === o.id))
+              (c._connectorRef.from.id === id || c._connectorRef.to.id === id))
       .map((c) => c.id);
-    connIds.forEach((id) => {
-      const c = canvas.getObjects().find((x) => x.id === id);
+    connIds.forEach((cid) => {
+      const c = canvas.getObjects().find((x) => x.id === cid);
       if (c) canvas.remove(c);
-      api("DELETE", `/api/objects/${id}`, {}).catch(console.error);
+      api("DELETE", `/api/objects/${cid}`, {}).catch(console.error);
     });
     canvas.remove(o);
-    if (o.id) api("DELETE", `/api/objects/${o.id}`, {}).catch(console.error);
-  });
+    api("DELETE", `/api/objects/${id}`, {}).catch(console.error);
+  } else {
+    canvas.remove(o);
+  }
+}
+
+// Delete several objects at once (used by the eraser drag and the Delete key).
+export function eraseObjects(objs) {
+  if (!objs || !objs.length) return;
+  state.suppressSync = true;
+  objs.forEach(eraseTarget);
   state.suppressSync = false;
   canvas.discardActiveObject();
   canvas.renderAll();
   scheduleCommit();
+}
+
+function deleteSelected() {
+  eraseObjects(activeOnes());
 }
 $("deleteBtn").addEventListener("click", deleteSelected);
 window.addEventListener("keydown", (e) => {
@@ -569,6 +579,67 @@ window.addEventListener("keydown", (e) => {
     deleteSelected();
   }
 });
+
+// ---- M-group: group / ungroup (a real Fabric group object) -----------------
+// Cascade-delete connectors attached to any of the given ids before a group is
+// formed, so we don't leave dangling references to members nested in the group.
+function deleteConnectorsFor(ids) {
+  const idSet = new Set(ids.filter(Boolean));
+  if (!idSet.size) return;
+  canvas.getObjects()
+    .filter((c) => c._isConnector &&
+            (idSet.has(c._connectorRef.from.id) || idSet.has(c._connectorRef.to.id)))
+    .forEach(eraseTarget);
+}
+
+export function groupSelection() {
+  const sel = canvas.getActiveObject();
+  if (!sel || sel.type !== "activeSelection") {
+    alert("Select two or more objects, then choose Group.");
+    return;
+  }
+  // Connectors and dimensions are structural — exclude them from a group.
+  const kids = sel.getObjects().filter((o) => !o._isConnector && !o._isDimension);
+  if (kids.length < 2) {
+    alert("Group needs at least two regular shapes (connectors and dimensions can't be grouped).");
+    return;
+  }
+  // Drop connectors referencing any grouped member — they can't survive the
+  // members being nested inside the group.
+  deleteConnectorsFor(kids.map((k) => k.id));
+  const grp = sel.toGroup();
+  grp.id = genId();
+  grp._meta = { layer: state.activeLayerId };
+  canvas.setActiveObject(grp);
+  canvas.requestRenderAll();
+  // Persist: the group replaces its former members on the server.
+  api("POST", "/api/objects", toCanonical(grp)).catch(console.error);
+  kids.forEach((k) => {
+    if (k.id) api("DELETE", `/api/objects/${k.id}`, {}).catch(console.error);
+  });
+  scheduleCommit();
+}
+
+export function ungroupSelection() {
+  const o = canvas.getActiveObject();
+  if (!o || o.type !== "group") {
+    alert("Select a grouped object, then choose Ungroup.");
+    return;
+  }
+  const kids = o.getObjects().slice();
+  // Convert the Fabric group back into a top-level ActiveSelection of members.
+  const sel = o.toActiveSelection();
+  if (sel) canvas.setActiveObject(sel);
+  canvas.requestRenderAll();
+  // Persist: the group is replaced by its (now top-level) members.
+  if (o.id) api("DELETE", `/api/objects/${o.id}`, {}).catch(console.error);
+  kids.forEach((k) => api("POST", "/api/objects", toCanonical(k)).catch(console.error));
+  scheduleCommit();
+  return sel;
+}
+
+// Flip the Dimension tool on/off (used by the Tools menu).
+export function toggleDimension() { setDimensionMode(!state.dimensionMode); }
 
 // ---- M1: ruler + alignment-guideline overlay ----------------------------
 function niceStep(raw) {

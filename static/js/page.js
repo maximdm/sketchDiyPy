@@ -4,6 +4,8 @@
 import { canvas, state, $, genId, palette, THEMES } from "./state.js";
 import { api, toCanonical, makeLine, refreshDimensionLabels } from "./sync.js";
 import { scheduleCommit } from "./persistence.js";
+import { addNote } from "./plan.js";
+import { eraseTarget } from "./tools.js";
 
 // Paint the board background colour and grid onto the (transparent) Fabric canvas
 // element. The grid is a CSS background-image, so it sits *behind* the artwork and
@@ -57,11 +59,15 @@ function syncPageControls() {
 // Paint a small colour swatch on each shape-tool button so it's obvious what
 // colour a newly-dropped shape will use under the current theme palette.
 function updateToolbarSwatches() {
-  const map = { rect: palette.rectStroke, circle: palette.circleStroke,
-                line: palette.lineStroke, text: palette.textStroke };
   document.querySelectorAll("[data-shape]").forEach((b) => {
     const sw = b.querySelector(".sw");
-    if (sw && map[b.dataset.shape]) sw.style.background = map[b.dataset.shape];
+    if (!sw) return;
+    const k = b.dataset.shape;
+    const c = k === "circle" ? palette.circleStroke
+            : k === "line" || k === "free" ? palette.lineStroke
+            : k === "text" ? palette.textStroke
+            : palette.rectStroke;
+    sw.style.background = c;
   });
 }
 
@@ -117,8 +123,92 @@ function applyTheme(name) {
   scheduleCommit();
 }
 
+// ---- 2D primitive path generators ---------------------------------------
+// Expanded primitive set. Each generator returns a Fabric path `d` string in
+// absolute canvas coordinates, centred at (cx, cy). They are dropped as plain
+// `path` objects so they round-trip through the canonical schema, extrude into
+// 3D solids, and export like every other shape.
+function polyPoints(cx, cy, r, sides, rot = -Math.PI / 2) {
+  const pts = [];
+  for (let i = 0; i < sides; i++) {
+    const a = rot + (i * 2 * Math.PI) / sides;
+    pts.push([cx + r * Math.cos(a), cy + r * Math.sin(a)]);
+  }
+  return pts;
+}
+function pathFromPts(pts, closed = true) {
+  let d = pts.map((p, i) => (i === 0 ? "M " : "L ") +
+    p[0].toFixed(1) + " " + p[1].toFixed(1)).join(" ");
+  if (closed) d += " Z";
+  return d;
+}
+function starPoints(cx, cy, outer, inner, points = 5) {
+  const pts = [];
+  for (let i = 0; i < points * 2; i++) {
+    const r = i % 2 === 0 ? outer : inner;
+    const a = -Math.PI / 2 + (i * Math.PI) / points;
+    pts.push([cx + r * Math.cos(a), cy + r * Math.sin(a)]);
+  }
+  return pts;
+}
+function ellipsePoints(cx, cy, rx, ry, seg = 48) {
+  const pts = [];
+  for (let i = 0; i < seg; i++) {
+    const a = (i * 2 * Math.PI) / seg;
+    pts.push([cx + rx * Math.cos(a), cy + ry * Math.sin(a)]);
+  }
+  return pts;
+}
+function roundedRectPath(cx, cy, w, h, r) {
+  const x0 = cx - w / 2, y0 = cy - h / 2, x1 = cx + w / 2, y1 = cy + h / 2;
+  r = Math.min(r, w / 2, h / 2);
+  return `M ${x0 + r} ${y0} L ${x1 - r} ${y0} Q ${x1} ${y0} ${x1} ${y0 + r} ` +
+         `L ${x1} ${y1 - r} Q ${x1} ${y1} ${x1 - r} ${y1} ` +
+         `L ${x0 + r} ${y1} Q ${x0} ${y1} ${x0} ${y1 - r} ` +
+         `L ${x0} ${y0 + r} Q ${x0} ${y0} ${x0 + r} ${y0} Z`;
+}
+function trapezoidPath(cx, cy, wTop, wBot, h) {
+  const x0 = cx - wBot / 2, x1 = cx + wBot / 2;
+  const xt0 = cx - wTop / 2, xt1 = cx + wTop / 2;
+  const y0 = cy - h / 2, y1 = cy + h / 2;
+  return pathFromPts([[xt0, y0], [xt1, y0], [x1, y1], [x0, y1]]);
+}
+function parallelogramPath(cx, cy, w, h, skew) {
+  const x0 = cx - w / 2, x1 = cx + w / 2;
+  const y0 = cy - h / 2, y1 = cy + h / 2;
+  return pathFromPts([[x0 + skew, y0], [x1 + skew, y0], [x1 - skew, y1], [x0 - skew, y1]]);
+}
+function arrowPath(cx, cy, w, h) {
+  const x0 = cx - w / 2, x1 = cx + w / 2;
+  const y0 = cy - h / 2, y1 = cy + h / 2;
+  const headW = w * 0.4, shaftW = w * 0.28;
+  return pathFromPts([
+    [x0, y0], [x1 - headW, y0], [x1 - headW, cy - h * 0.32],
+    [x1, cy], [x1 - headW, cy + h * 0.32], [x1 - headW, y1],
+    [x0, y1], [x0, cy + shaftW / 2], [x0 - shaftW, cy], [x0, cy - shaftW / 2],
+  ]);
+}
+
+// Map of shape kind -> generator returning {d, fill}. Stroke comes from the
+// theme palette so new primitives match the board like the built-ins.
+const SHAPE_GEN = {
+  rounded: (cx, cy) => ({ d: roundedRectPath(cx, cy, 160, 110, 26), fill: palette.rectFill }),
+  ellipse: (cx, cy) => ({ d: pathFromPts(ellipsePoints(cx, cy, 85, 60)), fill: palette.rectFill }),
+  triangle: (cx, cy) => ({ d: pathFromPts(polyPoints(cx, cy, 80, 3)), fill: palette.rectFill }),
+  pentagon: (cx, cy) => ({ d: pathFromPts(polyPoints(cx, cy, 85, 5)), fill: palette.rectFill }),
+  hexagon: (cx, cy) => ({ d: pathFromPts(polyPoints(cx, cy, 85, 6)), fill: palette.rectFill }),
+  heptagon: (cx, cy) => ({ d: pathFromPts(polyPoints(cx, cy, 85, 7)), fill: palette.rectFill }),
+  octagon: (cx, cy) => ({ d: pathFromPts(polyPoints(cx, cy, 85, 8)), fill: palette.rectFill }),
+  star: (cx, cy) => ({ d: pathFromPts(starPoints(cx, cy, 90, 40, 5)), fill: palette.rectFill }),
+  diamond: (cx, cy) => ({ d: pathFromPts(polyPoints(cx, cy, 90, 4, 0)), fill: palette.rectFill }),
+  trapezoid: (cx, cy) => ({ d: trapezoidPath(cx, cy, 90, 150, 100), fill: palette.rectFill }),
+  parallelogram: (cx, cy) => ({ d: parallelogramPath(cx, cy, 150, 90, 35), fill: palette.rectFill }),
+  arrow: (cx, cy) => ({ d: arrowPath(cx, cy, 150, 100), fill: palette.rectFill }),
+};
+
 // ---- toolbar: add shapes ------------------------------------------------
 function addShape(kind) {
+  if (freehandOn) setFreehand(false); // leaving the pencil for a placed shape
   const w = state.doc.width, h = state.doc.height;
   const cx = w / 2, cy = h / 2;
   let obj;
@@ -131,6 +221,14 @@ function addShape(kind) {
     obj = makeLine(cx - 80, cy, cx + 80, cy, { stroke: palette.lineStroke, strokeWidth: 2 });
   else if (kind === "text")
     obj = new fabric.IText("Double-click to edit", { left: cx, top: cy, fontSize: 28, fill: palette.textStroke, originX: "center", originY: "center" });
+  else if (SHAPE_GEN[kind]) {
+    const geo = SHAPE_GEN[kind](cx, cy);
+    obj = new fabric.Path(geo.d, {
+      fill: geo.fill, stroke: palette.rectStroke, strokeWidth: 2,
+    });
+    obj._d = geo.d; // ensure the canonical serializer has the raw `d`
+  }
+  if (!obj) return; // unknown shape kind — ignore
   obj.id = id;
   obj._meta = { layer: state.activeLayerId };
   canvas.add(obj);
@@ -140,8 +238,131 @@ function addShape(kind) {
 }
 
 document.querySelectorAll("[data-shape]").forEach((b) =>
-  b.addEventListener("click", () => addShape(b.dataset.shape))
+  b.addEventListener("click", () => {
+    if (b.dataset.shape === "free") { toggleFreehand(); return; }
+    addShape(b.dataset.shape);
+  })
 );
+
+// ---- freehand pencil ----------------------------------------------------
+// Click-drag on the canvas to sketch a freeform stroke. We capture the pointer
+// ourselves (rather than Fabric's PencilBrush) so the stroke is a plain,
+// editable `path` object that round-trips through the canonical schema like any
+// other shape. Toggle the toolbar button (or press Esc) to leave freehand mode
+// and return to normal selection/editing.
+let freehandOn = false;
+let fhPoints = null;   // points of the in-progress stroke (canvas coords)
+let fhPreview = null;  // live preview path on the canvas
+
+function fhColor() {
+  return ($("pStroke") && $("pStroke").value) || palette.lineStroke;
+}
+
+function pointsToPath(pts) {
+  return pts
+    .map((pt, i) => (i === 0 ? "M " : "L ") + pt[0].toFixed(1) + " " + pt[1].toFixed(1))
+    .join(" ");
+}
+
+function setFreehand(on) {
+  freehandOn = on;
+  // While sketching, disable object selection so drags draw instead of move.
+  canvas.selection = !on;
+  if (on) {
+    if (eraserOn) setEraser(false); // freehand and eraser are mutually exclusive
+    canvas.discardActiveObject();
+  }
+  document.querySelectorAll('[data-shape="free"]').forEach((b) =>
+    b.classList.toggle("active", on));
+  canvas.requestRenderAll();
+}
+
+function toggleFreehand() { setFreehand(!freehandOn); }
+
+canvas.on("mouse:down", (opt) => {
+  if (!freehandOn) return;
+  const p = canvas.getPointer(opt.e);
+  fhPoints = [[p.x, p.y]];
+  if (fhPreview) { canvas.remove(fhPreview); fhPreview = null; }
+});
+
+canvas.on("mouse:move", (opt) => {
+  if (!freehandOn || !fhPoints) return;
+  const p = canvas.getPointer(opt.e);
+  fhPoints.push([p.x, p.y]);
+  if (fhPreview) canvas.remove(fhPreview);
+  fhPreview = new fabric.Path(pointsToPath(fhPoints), {
+    stroke: fhColor(), strokeWidth: 2.5, fill: null,
+    selectable: false, evented: false,
+  });
+  canvas.add(fhPreview);
+  canvas.requestRenderAll();
+});
+
+canvas.on("mouse:up", () => {
+  if (!freehandOn || !fhPoints) return;
+  const pts = fhPoints;
+  fhPoints = null;
+  if (fhPreview) { canvas.remove(fhPreview); fhPreview = null; }
+  if (pts.length < 2) return; // a bare click, not a stroke
+  const path = new fabric.Path(pointsToPath(pts), {
+    stroke: fhColor(), strokeWidth: 2.5, fill: null,
+  });
+  path.id = genId();
+  path._meta = { layer: state.activeLayerId };
+  path._d = pointsToPath(pts); // ensure the canonical serializer has the raw `d`
+  canvas.add(path);
+  canvas.requestRenderAll();
+  api("POST", "/api/objects", toCanonical(path)).catch(console.error);
+  scheduleCommit();
+  // Mirror the sketch as a note in the Plan tab so hand-drawn annotations are
+  // captured in the written plan (editable / removable like any other note).
+  addNote("✎ Hand-drawn sketch", "sketch");
+});
+
+document.addEventListener("keydown", (e) => {
+  if (e.key === "Escape" && freehandOn) setFreehand(false);
+});
+
+// ---- eraser tool --------------------------------------------------------
+// Click (or click-drag) over an object to delete it, cascading connectors that
+// reference it — just like the Delete key. Exclusive with freehand and the
+// Dimension tool: turning it on drops the others.
+let eraserOn = false;
+
+function setEraser(on) {
+  eraserOn = on;
+  // Disable box-selection while erasing so a drag deletes instead of marqueeing.
+  canvas.selection = !on;
+  if (on) {
+    if (freehandOn) setFreehand(false);
+    canvas.discardActiveObject();
+  }
+  document.querySelectorAll('[data-action="tool-eraser"]').forEach((b) =>
+    b.classList.toggle("active", on));
+  canvas.defaultCursor = on ? "crosshair" : "default";
+  canvas.requestRenderAll();
+}
+
+function toggleEraser() { setEraser(!eraserOn); }
+
+function eraseAt(opt) {
+  if (!eraserOn || !opt || !opt.target) return;
+  const t = opt.target;
+  // Skip the selection marquee, and structural overlays (dimensions/connectors
+  // are evented:false so won't normally be targets, but guard anyway).
+  if (t.type === "activeSelection" || t._isDimension || t._isConnector) return;
+  eraseTarget(t);
+}
+
+canvas.on("mouse:down", (opt) => eraseAt(opt));
+canvas.on("mouse:move", (opt) => {
+  if (opt && opt.e && opt.e.buttons === 1) eraseAt(opt);
+});
+
+document.addEventListener("keydown", (e) => {
+  if (e.key === "Escape" && eraserOn) setEraser(false);
+});
 
 // ---- units / readout ----------------------------------------------------
 const UNIT_MM = { mm: 1, cm: 10, inch: 25.4 };
@@ -294,6 +515,23 @@ $("exportGrid").addEventListener("change", (e) => {
   scheduleCommit();
 });
 
+// G-code export options: end-mill diameter + roughing pass depth (review.md §6.2 H3).
+// Appended to the G-code link's query string so a tool-compensated / multi-pass
+// cut is one click away from the toolbar.
+function updateGcodeLink() {
+  const link = $("gcodeLink");
+  if (!link) return;
+  const tool = parseFloat($("gcTool").value) || 0;
+  const pass = parseFloat($("gcPass").value) || 0;
+  const q = new URLSearchParams();
+  if (tool > 0) q.set("tool", String(tool));
+  if (pass > 0) q.set("pass_depth", String(pass));
+  link.href = q.toString() ? `/api/export/gcode?${q}` : "/api/export/gcode";
+}
+$("gcTool").addEventListener("input", updateGcodeLink);
+$("gcPass").addEventListener("input", updateGcodeLink);
+updateGcodeLink();
+
 // Re-apply the current theme's default board / grid / palette (after manual tweaks).
 $("resetTheme").addEventListener("click", () => {
   if (state.doc) applyTheme(state.doc.theme || "light");
@@ -313,5 +551,6 @@ $("units").addEventListener("change", async (e) => {
 export {
   applyBoard, syncPageControls, updateToolbarSwatches, recolorOnThemeEnabled,
   recolorToTheme, applyTheme, addShape, pxPerUnit, fmtPx, objSizePx,
-  updateSizeReadout, updateReadout, applyPageSize,
+  updateSizeReadout, updateReadout, applyPageSize, toggleFreehand,
+  toggleEraser, setEraser,
 };

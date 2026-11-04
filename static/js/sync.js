@@ -53,22 +53,27 @@ function toCanonical(o) {
     // Bake position/scale/rotation into absolute endpoints (like paths), so
     // the canonical line is always identity-transformed. Fabric stores line
     // geometry only as x1/y1/x2/y2 plus width/height; calcLinePoints() gives
-    // the endpoints in local space, centred on the object's centre.
+    // the endpoints in local space, centred on the object's centre. M3: the
+    // canonical `x,y` is now the endpoints' midpoint (a uniform origin) instead
+    // of 0.
     const lp = o.calcLinePoints();
     const m = o.calcTransformMatrix();
     const p0 = fabric.util.transformPoint({ x: lp.x1, y: lp.y1 }, m);
     const p1 = fabric.util.transformPoint({ x: lp.x2, y: lp.y2 }, m);
-    base.x = 0; base.y = 0;
+    base.x = (p0.x + p1.x) / 2; base.y = (p0.y + p1.y) / 2;
     base.rotation = 0;
     base.scaleX = 1; base.scaleY = 1;
     base.geometry = { x1: p0.x, y1: p0.y, x2: p1.x, y2: p1.y };
   } else if (t === "path") {
     // Bake the object's live transform into the path data so moves, scales and
-    // rotations survive a reload. Paths stay absolute (identity transform).
-    base.x = 0; base.y = 0;
+    // rotations survive a reload. Paths stay absolute (identity transform). M3:
+    // `x,y` is now the bbox centre (a uniform origin) instead of 0.
+    const d = pathToAbsoluteD(o);
+    const c = pathBBoxCenter(d) || { x: 0, y: 0 };
+    base.x = c.x; base.y = c.y;
     base.rotation = 0;
     base.scaleX = 1; base.scaleY = 1;
-    base.geometry = { d: pathToAbsoluteD(o) };
+    base.geometry = { d };
   } else if (t === "i-text") {
     base.geometry = { text: o.text, fontSize: o.fontSize || 24 };
   } else if (o._isDimension) {
@@ -82,7 +87,7 @@ function toCanonical(o) {
     const p0 = fabric.util.transformPoint({ x: b.x1, y: b.y1 }, delta);
     const p1 = fabric.util.transformPoint({ x: b.x2, y: b.y2 }, delta);
     base.type = "dimension";
-    base.x = 0; base.y = 0;
+    base.x = (p0.x + p1.x) / 2; base.y = (p0.y + p1.y) / 2;  // M3: uniform origin
     base.rotation = 0;
     base.scaleX = 1; base.scaleY = 1;
     base.geometry = {
@@ -98,6 +103,17 @@ function toCanonical(o) {
     base.rotation = 0;
     base.scaleX = 1; base.scaleY = 1;
     base.geometry = { from: { ...r.from }, to: { ...r.to } };
+  } else if (t === "group") {
+    // A real Fabric group: its children already carry their own world transforms
+    // (calcTransformMatrix folds in the group transform), so flatten them and
+    // store the group itself as identity. Reload rebuilds the children at world
+    // coords and wraps them in a new group — positionally stable, and the member
+    // ids survive so parts/connectors that reference them keep working.
+    base.type = "group";
+    base.x = 0; base.y = 0;
+    base.rotation = 0;
+    base.scaleX = 1; base.scaleY = 1;
+    base.geometry = { children: o.getObjects().map((c) => toCanonical(c)) };
   }
   return base;
 }
@@ -105,17 +121,39 @@ function toCanonical(o) {
 // Flatten a Fabric.Path's transform (position/scale/rotation) into its `d`
 // string, expressed in canvas-absolute coordinates.
 function pathToAbsoluteD(o) {
-  if (!o._d) return "";
+  // Paths created directly (e.g. the freehand tool) may not carry `_d`; fall
+  // back to the parsed command list so they still serialize a usable `d`.
+  const d = o._d || (o.path ? fabric.util.joinPath(o.path) : "");
+  if (!d) return "";
   try {
-    const cmds = o.path || fabric.util.parsePath(o._d);
+    const cmds = o.path || fabric.util.parsePath(d);
     const abs = fabric.util.transformPath(
       cmds, o.calcTransformMatrix(), o.pathOffset
     );
     return fabric.util.joinPath(abs);
   } catch (err) {
     console.warn("path bake failed, keeping original d", err);
-    return o._d;
+    return d;
   }
+}
+
+// Centre of a path's coordinate bounding box. M3: used as the path's uniform
+// `x,y` origin so every shape carries a meaningful origin (rotation pivot /
+// selection origin) instead of `x,y == 0`. Mirrors core/pathgeom.path_center.
+function pathBBoxCenter(d) {
+  if (!d) return null;
+  const nums = (d.match(/-?\d*\.?\d+(?:e[-+]?\d+)?/gi) || []).map(Number);
+  if (nums.length < 2) return null;
+  let minx = Infinity, miny = Infinity, maxx = -Infinity, maxy = -Infinity;
+  for (let i = 0; i + 1 < nums.length; i += 2) {
+    const x = nums[i], y = nums[i + 1];
+    if (x < minx) minx = x;
+    if (y < miny) miny = y;
+    if (x > maxx) maxx = x;
+    if (y > maxy) maxy = y;
+  }
+  if (!isFinite(minx) || !isFinite(miny)) return null;
+  return { x: (minx + maxx) / 2, y: (miny + maxy) / 2 };
 }
 
 // Build a line that renders exactly between two absolute points. Placing it by
@@ -410,6 +448,11 @@ function buildFabric(o) {
       scaleX: Math.abs(o.scaleX) || 1, scaleY: Math.abs(o.scaleY) || 1,
       angle: o.rotation || 0,
     });
+  } else if (o.type === "group") {
+    // Rebuild the (world-coordinate) children, then wrap them in a group. The
+    // children's canonicals already encode their absolute placement.
+    const kids = (g.children || []).map(buildFabric).filter(Boolean);
+    obj = kids.length ? new fabric.Group(kids, { canvas }) : null;
   }
   if (obj) {
     obj.id = o.id;

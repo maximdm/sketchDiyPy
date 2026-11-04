@@ -22,7 +22,7 @@ formats cutters, lasers, and printers actually use.
 ```powershell
 cd sketchDiy
 python -m venv venv            # already created
-venv\Scripts\python -m pip install -r requirements.txt   # base, lightweight (2D + tests)
+venv\Scripts\python -m pip install -r requirements.txt   # base, lightweight (2D only — tests live in requirements-dev.txt)
 # Optional 3D features (accurate STL/STEP + mesh cleanup):
 venv\Scripts\python -m pip install -r requirements-3d.txt
 venv\Scripts\python -m uvicorn server:app --reload
@@ -112,13 +112,27 @@ Open http://127.0.0.1:8000
 - **Image → paths:** upload a logo/photo, trace it (outline or edge mode,
   threshold/invert controls, optional curve smoothing and `rembg` background
   removal), and commit editable `path` objects to the canvas.
+- **Plan workspace:** a third tab (alongside **2D Design** / **3D Model**) for
+  turning a sketch into a build. It holds a manual **shopping list** (item /
+  qty / unit / price / link, with a running total in the chosen `currency`),
+  ordered **assembly steps** (checkable), an **on-demand Parts cut list**
+  derived from the drawing's rectangles/circles (with material + unit cost), and
+  free-form **Notes** (a "sketch" note is auto-added when you draw a freehand
+  stroke). Everything round-trips through `/api/settings`, so it saves and
+  restores with the project. There is deliberately **no auto-BOM**: consumables
+  (screws, glue, finish) and build order are things the geometry can't tell you,
+  so you maintain the buy list and steps yourself.
 
 ## Architecture
 
 ```
 static/            Frontend: Fabric.js canvas + properties panel + console
   index.html
-  app.js           canonical object <-> Fabric sync, backend API calls
+  app.js           entry point: imports the ES modules below (no build step)
+  js/
+    state.js       Fabric canvas + shared mutable state (the `state` object)
+    sync.js        canonical object <-> Fabric converters + backend API calls
+    ...            layers / page / tools / console / trace / 3d / plan / menu
   style.css
 core/
   document.py      Canonical document model + shape factories (pure Python)

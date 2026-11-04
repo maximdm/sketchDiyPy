@@ -226,3 +226,31 @@ def test_to_gcode_params_are_honoured():
     assert "F600.0" in g  # feed on cuts
     assert "F250.0" in g  # plunge rate
     assert "Z8.000" in g  # safe Z
+
+
+def test_to_gcode_tool_offset_moves_outline_outward():
+    # 20x20 rect centred at (200,200); tool diameter 2mm -> outline grows by 1mm
+    doc = _doc_with(rect(200, 200, 20, 20))
+    base = to_gcode(doc)            # tool=0 (centreline)
+    offset = to_gcode(doc, tool=2.0)
+    base_xs = [float(v) for v in re.findall(r"X([-\d.]+)", base)]
+    off_xs = [float(v) for v in re.findall(r"X([-\d.]+)", offset)]
+    # the offset outline's extremes are farther from centre than the centreline
+    assert max(off_xs) > max(base_xs)
+    assert min(off_xs) < min(base_xs)
+
+
+def test_to_gcode_multipass_steps_depth():
+    doc = _doc_with(rect(200, 200, 20, 20))
+    # depth -6 with pass_depth 2 -> three Z passes at -2, -4, -6
+    g = to_gcode(doc, depth=-6.0, pass_depth=2.0)
+    plunges = sorted({float(v) for v in re.findall(r"Z([-\d.]+)", g) if float(v) < 0})
+    assert plunges == [-6.0, -4.0, -2.0]
+
+
+def test_to_dxf_fallback_when_ezdxf_absent():
+    doc = _doc_with(rect(100, 100, 50, 30))
+    # explicit hand-rolled path still emits outlines
+    assert "LWPOLYLINE" in to_dxf(doc, use_ezdxf=False)
+    # default path (ezdxf not installed here) also produces a valid DXF
+    assert "LWPOLYLINE" in to_dxf(doc)

@@ -76,6 +76,23 @@ def test_run_blocks_dangerous_builtins(doc):
         run("__import__('os')", doc)
 
 
+def test_run_blocks_dunder_escape(doc):
+    # The classic restricted-builtins escape must be rejected up front.
+    with pytest.raises(RuntimeError):
+        run("().__class__.__bases__[0].__subclasses__()", doc)
+
+
+def test_run_blocks_import_statement(doc):
+    with pytest.raises(RuntimeError):
+        run("import os", doc)
+
+
+def test_run_blocks_unknown_call(doc):
+    # A name that isn't a helper/builtin/defined by the script can't be called.
+    with pytest.raises(RuntimeError):
+        run("os()", doc)
+
+
 def test_run_surfaces_exceptions_as_runtimeerror(doc):
     with pytest.raises(RuntimeError):
         run("1 / 0", doc)

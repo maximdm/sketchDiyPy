@@ -1,12 +1,21 @@
 """Runs user Python for the Hybrid script console.
 
-NOTE: this executes arbitrary code in the local process. That is fine for a
-personal, single-user DIY tool, but it is NOT a sandbox for untrusted input.
-Later phases can swap this for a restricted AST evaluator if needed.
+The console is **AST-sandboxed** (review.md §6.2 H1): before the code reaches
+`exec`, `_validate_sandbox` rejects imports and any dunder attribute access
+(e.g. `().__class__.__subclasses__()`), which is how a "restricted builtins"
+sandbox is normally escaped. Together with a curated builtins map this closes the
+obvious escapes while still allowing the console helpers (`rect`/`circle`/.../
+`math`/`doc`) and ordinary Python.
+
+It is still intended for a local, single-user DIY tool — not a sandbox for
+hostile, untrusted input — but the trivial `exec`-escape is gone. A Pyodide
+in-browser variant remains a future option if the project's no-CDN/offline rule
+is ever relaxed.
 """
 
 from __future__ import annotations
 
+import ast as _ast
 import copy
 import math
 import re
@@ -114,6 +123,78 @@ def grid(objs, cols, gap_x=20, gap_y=20, x0=0, y0=0):
     return objs
 
 
+def _names_in_target(t) -> set:
+    """All simple names bound by an assignment / loop target."""
+    return {n.id for n in _ast.walk(t) if isinstance(n, _ast.Name)}
+
+
+def _collect_defined_names(tree: _ast.Module) -> set:
+    """Names bound by assignments, loops, and function defs in the script.
+
+    Used so the AST gate can permit calls to user-defined functions / lambdas
+    without also permitting calls to dangerous builtins (`os`, `eval`, ...).
+    """
+    names: set = set()
+    for node in _ast.walk(tree):
+        if isinstance(node, (_ast.FunctionDef, _ast.AsyncFunctionDef)):
+            names.add(node.name)
+        elif isinstance(node, _ast.Assign):
+            for t in node.targets:
+                names |= _names_in_target(t)
+        elif isinstance(node, _ast.For):
+            names |= _names_in_target(node.target)
+        elif isinstance(node, _ast.AugAssign):
+            names |= _names_in_target(node.target)
+        elif isinstance(node, (_ast.ListComp, _ast.SetComp, _ast.DictComp)):
+            for gen in node.generators:
+                names |= _names_in_target(gen.target)
+    return names
+
+
+def _validate_sandbox(code: str, allowed_names: set) -> None:
+    """Reject dangerous Python *before* it reaches `exec` (review.md §6.2 H1).
+
+    Closes the classic "restricted builtins" escape
+    (`().__class__.__bases__[0].__subclasses__()`) by forbidding imports and any
+    dunder attribute access, and refuses calls to names that aren't part of the
+    console env or defined by the user's own script.
+    """
+    try:
+        tree = _ast.parse(code, "<console>", "exec")
+    except SyntaxError as e:  # noqa: BLE001 - surface to the user
+        raise RuntimeError(f"SyntaxError: {e}") from e
+
+    defined = _collect_defined_names(tree)
+    problems: list = []
+
+    class _Visitor(_ast.NodeVisitor):
+        def visit_Import(self, node):           # noqa: N802
+            problems.append("imports are not allowed")
+        def visit_ImportFrom(self, node):        # noqa: N802
+            problems.append("imports are not allowed")
+        def visit_Global(self, node):            # noqa: N802
+            problems.append("global is not allowed")
+        def visit_Nonlocal(self, node):          # noqa: N802
+            problems.append("nonlocal is not allowed")
+        def visit_Attribute(self, node):         # noqa: N802
+            if node.attr.startswith("_"):
+                problems.append(
+                    f"access to '{node.attr}' is not allowed (no dunder access)"
+                )
+            self.generic_visit(node)
+        def visit_Call(self, node):              # noqa: N802
+            f = node.func
+            if isinstance(f, _ast.Name) and (
+                f.id not in allowed_names and f.id not in defined
+            ):
+                problems.append(f"call to '{f.id}' is not allowed")
+            self.generic_visit(node)
+
+    _Visitor().visit(tree)
+    if problems:
+        raise RuntimeError(f"blocked: {problems[0]}")
+
+
 def run(code: str, doc) -> dict:
     """Execute `code` with the document in scope; return the updated doc dict.
 
@@ -156,6 +237,10 @@ def run(code: str, doc) -> dict:
         "add": doc.add,
         "clear": doc.clear,
     }
+    # AST-sandbox the script before it can do anything (review.md §6.2 H1): this
+    # is the gate that closes the `().__class__.__subclasses__()` style escape.
+    allowed_names = set(env.keys()) | set(safe_builtins.keys())
+    _validate_sandbox(code, allowed_names)
     # Transactional: snapshot the doc first so a script that errors part-way
     # through (after adding some shapes) can't leave the document half-mutated.
     # `to_dict()` shares the live `objects` list by reference, so we deep-copy:

@@ -9,6 +9,8 @@ from __future__ import annotations
 
 import uuid
 
+from core.pathgeom import path_center
+
 
 def _id() -> str:
     return uuid.uuid4().hex[:12]
@@ -50,11 +52,17 @@ def circle(x, y, r, **kw):
 
 
 def line(x1, y1, x2, y2, **kw):
-    return _obj("line", 0, 0, {"x1": x1, "y1": y1, "x2": x2, "y2": y2}, kw)
+    cx, cy = (x1 + x2) / 2.0, (y1 + y2) / 2.0  # M3: uniform centroid origin
+    return _obj("line", cx, cy, {"x1": x1, "y1": y1, "x2": x2, "y2": y2}, kw)
 
 
 def path(x, y, d, **kw):
-    return _obj("path", x, y, {"d": d}, kw)
+    # M3: store a uniform centroid origin (bbox centre) as x,y; the absolute `d`
+    # remains authoritative for position, so the rotation pivot / selection
+    # origin is meaningful for every type. The passed x,y (rotation centre in the
+    # old convention) is intentionally overridden.
+    c = path_center(d=d) or (0.0, 0.0)
+    return _obj("path", c[0], c[1], {"d": d}, kw)
 
 
 def text(x, y, s, **kw):
@@ -72,8 +80,9 @@ def dimension(x1, y1, x2, y2, offset=26, **kw):
     kw.setdefault("stroke", "#1f6feb")
     kw.setdefault("strokeWidth", 1.5)
     kw.setdefault("fontSize", 14)
+    cx, cy = (x1 + x2) / 2.0, (y1 + y2) / 2.0  # M3: uniform centroid origin
     return _obj(
-        "dimension", 0, 0,
+        "dimension", cx, cy,
         {"x1": x1, "y1": y1, "x2": x2, "y2": y2, "offset": offset},
         kw,
     )
@@ -99,6 +108,43 @@ def connector(from_id, from_anchor, to_id, to_anchor, **kw):
     )
 
 
+def _normalise_origin(o: dict) -> None:
+    """M3: give line/dimension/path a uniform centroid origin on load.
+
+    Pre-M3 these types stored `x,y == 0` with absolute geometry; this recomputes
+    the centroid into `x,y` for legacy objects so the schema stays consistent.
+    New objects already carry the centroid (set by the factories), so this is a
+    no-op for them — and legacy `./projects/*.json` / the frontend's persisted
+    docs are migrated automatically with no file rewrite.
+    """
+    t = o.get("type")
+    if t not in ("line", "dimension", "path"):
+        return
+    x, y = o.get("x"), o.get("y")
+    if x is None or y is None:
+        return
+    if abs(x) < 1e-9 and abs(y) < 1e-9:
+        cen = _centroid(t, o.get("geometry", {}))
+        if cen:
+            o["x"], o["y"] = cen
+
+
+def _centroid(typ: str, g: dict) -> tuple[float, float]:
+    """Centroid (uniform `x,y` origin) for a shape given its geometry.
+
+    rect/circle/text keep their centre origin (set by the factory); line/
+    dimension get their endpoints' midpoint; path gets its bbox centre. Used both
+    by the factories and by `_normalise_origin` for legacy loads.
+    """
+    if typ in ("line", "dimension"):
+        return ((g["x1"] + g["x2"]) / 2.0, (g["y1"] + g["y2"]) / 2.0)
+    if typ == "path":
+        c = path_center(d=g.get("d", ""))
+        if c:
+            return c
+    return (0.0, 0.0)
+
+
 class Document:
     """In-memory document. Persistence/undo come in a later phase."""
 
@@ -120,6 +166,7 @@ class Document:
         self.snap_objects = True
         self.snap_page = True
         self.layers = [_default_layer()]
+        self.plan = {"currency": "$", "buy": [], "steps": [], "parts": [], "notes": []}
         self.objects = []
 
     def to_dict(self):
@@ -140,6 +187,7 @@ class Document:
             "snap_objects": self.snap_objects,
             "snap_page": self.snap_page,
             "layers": self.layers,
+            "plan": self.plan,
             "objects": self.objects,
         }
 
@@ -168,7 +216,12 @@ class Document:
         # Always keep at least one layer; tolerate empty/missing layer lists from
         # older project files.
         self.layers = layers if layers else [_default_layer()]
+        self.plan = d.get("plan") or {"currency": "$", "buy": [], "steps": [], "parts": [], "notes": []}
         self.objects = d.get("objects", []) or []
+        # M3: migrate legacy objects (line/dimension/path with x,y == 0) to a
+        # uniform centroid origin so the schema is consistent everywhere.
+        for o in self.objects:
+            _normalise_origin(o)
 
     def add(self, obj):
         self.objects.append(obj)

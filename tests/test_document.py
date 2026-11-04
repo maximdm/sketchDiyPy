@@ -54,8 +54,9 @@ def test_circle_and_line_geometry():
     assert circle(3, 4, 5)["geometry"] == {"r": 5}
     ln = line(1, 2, 3, 4)
     assert ln["geometry"] == {"x1": 1, "y1": 2, "x2": 3, "y2": 4}
-    # line/connector store identity transform
-    assert ln["x"] == 0 and ln["rotation"] == 0
+    # M3: line/dimension/path carry a uniform centroid origin (midpoint), while
+    # the absolute geometry is unchanged.
+    assert ln["x"] == 2 and ln["y"] == 3 and ln["rotation"] == 0
 
 
 def test_connector_stores_refs_not_endpoints():

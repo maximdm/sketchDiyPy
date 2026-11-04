@@ -48,6 +48,25 @@ def client(app):
     return _ASGIClient(app)
 
 
+def test_sessions_are_isolated():
+    """H2: different X-Session-Id headers get isolated documents (review.md §6.2)."""
+    c = client(server.app)
+    # Session "alpha" gets an object, session "beta" must not see it, and the
+    # default (no header) document must be independent of both.
+    a = c.post("/api/objects", json={"id": "o1", "type": "rect",
+                                     "x": 0, "y": 0, "geometry": {"w": 10, "h": 10}},
+              headers={"X-Session-Id": "alpha"})
+    assert a.status_code == 200
+    beta = c.get("/api/doc", headers={"X-Session-Id": "beta"})
+    assert beta.status_code == 200
+    assert all(o["id"] != "o1" for o in beta.json()["objects"])
+    default = c.get("/api/doc")
+    assert all(o["id"] != "o1" for o in default.json()["objects"])
+    # The same session keeps its object across requests.
+    alpha = c.get("/api/doc", headers={"X-Session-Id": "alpha"})
+    assert any(o["id"] == "o1" for o in alpha.json()["objects"])
+
+
 def _slow_job():
     """Picklable helper used to exercise the worker job timeout."""
     time.sleep(2.0)
@@ -160,25 +179,25 @@ def test_3d_build_sweep_requires_an_open_path():
     c = client(server.app)
     # Swap in a doc with a closed profile but NO open path: a clear 400 either way
     # (ValueError "needs an open path" with build123d, or the build123d-missing msg).
-    saved = server.doc
+    saved = server.store.get()
     try:
-        server.doc = Document()
-        server.doc.add(rect(300, 250, 200, 120))
+        server.store.set_default(Document())
+        server.store.get().add(rect(300, 250, 200, 120))
         r = c.post("/api/3d/extrude", json={"op": "sweep"})
         assert r.status_code == 400
     finally:
-        server.doc = saved
+        server.store.set_default(saved)
 
 
 @pytest.mark.skipif(not build123d_present, reason="build123d not installed")
 def test_3d_build_and_export_sweep():
     c = client(server.app)
     # Swap in a doc that has a closed profile + an open path, then sweep it.
-    saved = server.doc
+    saved = server.store.get()
     try:
-        server.doc = Document()
-        server.doc.add(rect(300, 250, 200, 120))
-        server.doc.add(path(0, 0, "M0,0 L80,0 L80,120 L200,120", stroke="#000"))
+        server.store.set_default(Document())
+        server.store.get().add(rect(300, 250, 200, 120))
+        server.store.get().add(path(0, 0, "M0,0 L80,0 L80,120 L200,120", stroke="#000"))
         r = c.post("/api/3d/extrude", json={"op": "sweep", "quality": "medium"})
         assert r.status_code == 200
         j = r.json()
@@ -190,7 +209,7 @@ def test_3d_build_and_export_sweep():
         assert e.status_code == 200
         assert len(e.content) > 0
     finally:
-        server.doc = saved
+        server.store.set_default(saved)
 
 
 def test_worker_offloads_to_process_pool():
@@ -232,4 +251,78 @@ def test_worker_shutdown_is_safe_and_idempotent():
     # A subsequent job recreates the pool (or uses the thread fallback).
     worker3d.get_executor()
     assert worker3d.executor_kind() in ("process", "thread")
+
+
+# --------------------------------------------------------------------------
+# Generative 3D primitives + multi-object scene merge export
+# --------------------------------------------------------------------------
+def test_3d_primitive_returns_mesh_for_every_kind():
+    c = client(server.app)
+    for kind in ("box", "sphere", "cylinder", "cone", "torus", "capsule", "pyramid"):
+        r = c.post("/api/3d/primitive",
+                   json={"kind": kind, "params": {}, "quality": "medium"})
+        assert r.status_code == 200, kind
+        j = r.json()
+        assert j["kind"] == kind
+        assert j["triangles"] > 0
+        assert "bbox" in j and "positions" in j and "indices" in j
+        assert "build123d" in j
+
+
+def test_3d_primitive_rejects_unknown_kind():
+    c = client(server.app)
+    r = c.post("/api/3d/primitive", json={"kind": "not-a-primitive"})
+    assert r.status_code == 400
+
+
+def test_3d_export_scene_merge_primitives_stl():
+    """Several primitives merge into one STL regardless of build123d presence."""
+    c = client(server.app)
+    items = [
+        {"source": {"type": "primitive", "kind": "box",
+                    "params": {"w": 40, "h": 40, "d": 40}, "quality": "medium"},
+         "transform": {"pos": {"x": 50, "y": 0, "z": 0}, "rot": {"x": 0, "y": 0, "z": 0}, "scale": 1}},
+        {"source": {"type": "primitive", "kind": "sphere",
+                    "params": {"r": 25}, "quality": "medium"},
+         "transform": {"pos": {"x": -50, "y": 0, "z": 10}, "rot": {"x": 0, "y": 45, "z": 0}, "scale": 1.5}},
+    ]
+    r = c.post("/api/3d/export", json={"format": "stl", "items": items})
+    assert r.status_code == 200
+    assert len(r.content) > 0
+
+
+@pytest.mark.skipif(not build123d_present, reason="build123d not installed")
+def test_3d_export_scene_merge_primitives_step():
+    c = client(server.app)
+    items = [
+        {"source": {"type": "primitive", "kind": "box",
+                    "params": {"w": 40, "h": 40, "d": 40}, "quality": "medium"},
+         "transform": {"pos": {"x": 0, "y": 0, "z": 0}, "rot": {"x": 0, "y": 0, "z": 0}, "scale": 1}},
+    ]
+    r = c.post("/api/3d/export", json={"format": "step", "items": items})
+    assert r.status_code == 200
+    assert len(r.content) > 0
+
+
+@pytest.mark.skipif(not build123d_present, reason="build123d not installed")
+def test_3d_export_scene_merge_sketch_and_primitive():
+    """A sketch-extrude item and a primitive item fuse into one STL."""
+    c = client(server.app)
+    saved = server.store.get()
+    try:
+        server.store.set_default(Document())
+        server.store.get().add(rect(300, 250, 200, 120))
+        items = [
+            {"source": {"type": "sketch", "op": "extrude", "ids": None,
+                        "depth": 20, "quality": "low"},
+             "transform": {"pos": {"x": 0, "y": 0, "z": 0}, "rot": {"x": 0, "y": 0, "z": 0}, "scale": 1}},
+            {"source": {"type": "primitive", "kind": "cylinder",
+                        "params": {"r": 15, "h": 30}, "quality": "low"},
+             "transform": {"pos": {"x": 100, "y": 0, "z": 0}, "rot": {"x": 0, "y": 0, "z": 0}, "scale": 1}},
+        ]
+        r = c.post("/api/3d/export", json={"format": "stl", "items": items})
+        assert r.status_code == 200
+        assert len(r.content) > 0
+    finally:
+        server.store.set_default(saved)
 

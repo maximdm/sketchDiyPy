@@ -123,6 +123,15 @@
       border-color: rgba(255,255,255,.25);
     }
 
+    /* Active state for the toggle-style toolbar buttons (e.g. Freehand). */
+    #toolbar2d .btn.active {
+      border-color: #1f6feb; color: #1f6feb; background: rgba(31,111,235,.10);
+    }
+    body.chalk #toolbar2d .btn.active, body.blueprint #toolbar2d .btn.active,
+    body.kraft #toolbar2d .btn.active, body.neon #toolbar2d .btn.active {
+      border-color: #8ab4ff; color: #8ab4ff; background: rgba(138,180,255,.16);
+    }
+
     /* Layers panel rows. */
     .layer-list { display: flex; flex-direction: column; gap: 6px; margin-bottom: 8px; }
     .layer-row {
@@ -135,6 +144,19 @@
       flex: 1; min-width: 0; font-size: 13px; padding: 2px 6px;
     }
     .layer-row .xbtn { padding: 2px 7px; font-size: 13px; line-height: 1.2; }
+    /* Blender-style outliner extras: colour tag, solo, drag-reorder. */
+    .layer-row { cursor: grab; }
+    .layer-row.dragging { opacity: .4; }
+    .layer-row.solo-dim { opacity: .5; }
+    .layer-color {
+      width: 18px; height: 18px; padding: 0; border: 1px solid rgba(0,0,0,.18);
+      border-radius: 4px; background: none; cursor: pointer; flex: 0 0 auto;
+    }
+    body.chalk .layer-color, body.blueprint .layer-color,
+    body.kraft .layer-color, body.neon .layer-color { border-color: rgba(255,255,255,.25); }
+    .xbtn.solo-on { color: #1f6feb; border-color: #1f6feb; }
+    body.chalk .xbtn.solo-on, body.blueprint .xbtn.solo-on,
+    body.kraft .xbtn.solo-on, body.neon .xbtn.solo-on { color: #8ab4ff; border-color: #8ab4ff; }
     body.chalk .layer-row, body.blueprint .layer-row,
     body.kraft .layer-row, body.neon .layer-row {
       border-color: #2b3744; background: #141b22;
@@ -151,20 +173,316 @@
     body.kraft .d3-canvas, body.neon .d3-canvas {
       border-color: #2b3744;
     }
+
+    /* ---- Blender-style workspace: top tabs + two switchable views ------ */
+    .ws-tabs {
+      display: inline-flex; gap: 4px; padding: 3px; border-radius: 10px;
+      background: rgba(15,23,42,.06); border: 1px solid #e2e8f0;
+    }
+    body.chalk .ws-tabs, body.blueprint .ws-tabs,
+    body.kraft .ws-tabs, body.neon .ws-tabs {
+      background: rgba(255,255,255,.06); border-color: #2b3744;
+    }
+    .ws-tab {
+      font-size: 13px; font-weight: 600; padding: 5px 13px; border-radius: 8px;
+      border: 1px solid transparent; background: transparent; color: #475569;
+      cursor: pointer; transition: background .12s, color .12s;
+    }
+    .ws-tab:hover { background: rgba(15,23,42,.06); }
+    .ws-tab.active { background: #1f6feb; color: #fff; border-color: #1f6feb; }
+    body.chalk .ws-tab, body.blueprint .ws-tab,
+    body.kraft .ws-tab, body.neon .ws-tab { color: #cbd5e1; }
+    body.chalk .ws-tab:hover, body.blueprint .ws-tab:hover,
+    body.kraft .ws-tab:hover, body.neon .ws-tab:hover {
+      background: rgba(255,255,255,.08);
+    }
+    body.chalk .ws-tab.active, body.blueprint .ws-tab.active,
+    body.kraft .ws-tab.active, body.neon .ws-tab.active {
+      background: #3b82f6; border-color: #3b82f6; color: #fff;
+    }
+
+    /* Only the active view is shown; both live in the DOM. */
+    .workspace { display: flex; flex: 1; min-height: 0; }
+    .view { display: none; flex: 1; min-height: 0; gap: 1rem; padding: 1rem; }
+    .view.view--active { display: flex; flex-direction: column; }
+    @media (min-width: 1024px) { .view.view--active { flex-direction: row; } }
+
+    /* Big 3D viewport (fills the main area in the 3D workspace). */
+    .viewport3d {
+      position: relative; flex: 1; min-width: 0; min-height: 55vh;
+      border-radius: 12px; border: 1px solid #e2e8f0; overflow: hidden;
+      background: #0b1220; display: flex;
+    }
+    body.chalk .viewport3d, body.blueprint .viewport3d,
+    body.kraft .viewport3d, body.neon .viewport3d { border-color: #2b3744; }
+    .d3-viewport {
+      width: 100%; height: 100%; display: block;
+      cursor: grab; touch-action: none;
+    }
+    .d3-viewport:active { cursor: grabbing; }
+    .vp-hint {
+      position: absolute; left: 10px; bottom: 10px; font-size: 12px;
+      color: #9fb3c8; background: rgba(11,18,32,.55); padding: 3px 8px;
+      border-radius: 6px; pointer-events: none;
+    }
+
+    /* Bottom status bar (Blender-style): workspace · view · message. */
+    .statusbar {
+      display: flex; align-items: center; gap: 12px; padding: 5px 14px;
+      border-top: 1px solid #e2e8f0; background: #fff;
+      font-size: 12px; color: #475569;
+    }
+    body.chalk .statusbar, body.blueprint .statusbar,
+    body.kraft .statusbar, body.neon .statusbar {
+      background: #141b22; border-color: #2b3744; color: #9fb3c8;
+    }
+    .sb-pill {
+      padding: 2px 9px; border-radius: 999px; background: rgba(15,23,42,.06);
+      border: 1px solid #e2e8f0; font-weight: 600;
+    }
+    body.chalk .sb-pill, body.blueprint .sb-pill,
+    body.kraft .sb-pill, body.neon .sb-pill {
+      background: rgba(255,255,255,.06); border-color: #2b3744;
+    }
+    .sb-spacer { flex: 1; }
+
+    /* In the 3D and Plan workspaces the 2D-only toolbar is irrelevant; hide it. */
+    body:not(.view-2d) #toolbar2d { display: none; }
+
+    /* ---- Plan workspace (shopping list + assembly steps) ------------- */
+    .plan-area { max-width: 880px; }
+    .plan-summary {
+      display: flex; flex-wrap: wrap; align-items: center; gap: 14px;
+      margin: 6px 0 2px;
+    }
+    .plan-summary .stat {
+      display: flex; flex-direction: column; align-items: center;
+      padding: 8px 16px; border: 1px solid #e2e8f0; border-radius: 10px;
+      background: #f8fafc; min-width: 88px;
+    }
+    body.chalk .plan-summary .stat, body.blueprint .plan-summary .stat,
+    body.kraft .plan-summary .stat, body.neon .plan-summary .stat {
+      background: #141b22; border-color: #2b3744;
+    }
+    .plan-summary .stat-num { font-size: 22px; font-weight: 700; color: #1f6feb; }
+    body.chalk .plan-summary .stat-num, body.blueprint .plan-summary .stat-num,
+    body.kraft .plan-summary .stat-num, body.neon .plan-summary .stat-num { color: #8ab4ff; }
+    .plan-summary .stat-lbl { font-size: 12px; color: #64748b; }
+    .plan-cur { margin-left: auto; display: flex; align-items: center; gap: 6px; font-size: 13px; }
+
+    .buy-list { display: flex; flex-direction: column; gap: 6px; margin-bottom: 8px; }
+    .buy-row {
+      display: grid; gap: 6px; align-items: center;
+      grid-template-columns: 1fr 64px 78px 88px 1fr auto auto;
+      padding: 4px 6px; border: 1px solid #e2e8f0; border-radius: 8px; background: #fff;
+    }
+    body.chalk .buy-row, body.blueprint .buy-row,
+    body.kraft .buy-row, body.neon .buy-row { border-color: #2b3744; background: #141b22; }
+    .buy-row input.field { padding: 4px 6px; font-size: 13px; }
+    .buy-row .buy-line-total { font-variant-numeric: tabular-nums; text-align: right; font-weight: 600; }
+    .buy-row .buy-rm { padding: 2px 7px; font-size: 13px; }
+    .buy-total { font-size: 14px; }
+    .buy-total strong { color: #1f6feb; }
+    body.chalk .buy-total strong, body.blueprint .buy-total strong,
+    body.kraft .buy-total strong, body.neon .buy-total strong { color: #8ab4ff; }
+
+    /* Parts (cut list) rows reuse the buy grid plus a material + layer tag. */
+    .part-list { display: flex; flex-direction: column; gap: 6px; margin-bottom: 8px; }
+    .part-row {
+      display: grid; gap: 6px; align-items: center;
+      grid-template-columns: 1fr 96px 56px 116px 76px 70px auto auto;
+      padding: 4px 6px; border: 1px solid #e2e8f0; border-radius: 8px; background: #fff;
+    }
+    body.chalk .part-row, body.blueprint .part-row,
+    body.kraft .part-row, body.neon .part-row { border-color: #2b3744; background: #141b22; }
+    .part-row input.field, .part-row select.field { padding: 4px 6px; font-size: 13px; }
+    .part-size {
+      font-variant-numeric: tabular-nums; text-align: center; font-size: 12px;
+      color: #475569; white-space: nowrap;
+    }
+    body.chalk .part-size, body.blueprint .part-size,
+    body.kraft .part-size, body.neon .part-size { color: #9fb3c8; }
+    .part-layer {
+      font-size: 11px; color: #64748b; background: #f1f5f9; border-radius: 999px;
+      padding: 1px 8px; white-space: nowrap;
+    }
+    body.chalk .part-layer, body.blueprint .part-layer,
+    body.kraft .part-layer, body.neon .part-layer {
+      background: #1c2530; color: #9fb3c8;
+    }
+    .part-row .buy-line-total { text-align: right; }
+    .part-row .buy-rm { padding: 2px 7px; font-size: 13px; }
+
+    .step-list { display: flex; flex-direction: column; gap: 6px; }
+    .step-row {
+      display: grid; gap: 6px; align-items: center;
+      grid-template-columns: auto auto 1fr auto auto;
+      padding: 4px 6px; border: 1px solid #e2e8f0; border-radius: 8px; background: #fff;
+    }
+    body.chalk .step-row, body.blueprint .step-row,
+    body.kraft .step-row, body.neon .step-row { border-color: #2b3744; background: #141b22; }
+    .step-row .step-no {
+      width: 26px; height: 26px; display: grid; place-items: center;
+      border-radius: 999px; background: #1f6feb; color: #fff; font-weight: 700; font-size: 13px;
+    }
+    body.chalk .step-row .step-no, body.blueprint .step-row .step-no,
+    body.kraft .step-row .step-no, body.neon .step-row .step-no { background: #3b82f6; }
+    .step-row textarea.field { resize: vertical; min-height: 34px; font-size: 13px; }
+    .step-row.done textarea.field { text-decoration: line-through; opacity: .6; }
+    .step-row .step-handle { cursor: grab; color: #94a3b8; font-size: 16px; user-select: none; }
+    .step-row .xbtn { padding: 2px 7px; font-size: 13px; }
+    .step-row.dragging { opacity: .4; }
+    .step-row.drop-target { border-color: #1f6feb; }
+
+    /* Notes list (Plan tab). */
+    .note-scope {
+      font-size: 13px; color: #475569; margin: 2px 0 10px;
+    }
+    .note-scope strong { color: #1f6feb; }
+    body.chalk .note-scope, body.blueprint .note-scope,
+    body.kraft .note-scope, body.neon .note-scope { color: #9fb3c8; }
+    body.chalk .note-scope strong, body.blueprint .note-scope strong,
+    body.kraft .note-scope strong, body.neon .note-scope strong { color: #8ab4ff; }
+    .note-list { display: flex; flex-direction: column; gap: 6px; }
+    .note-row {
+      display: flex; gap: 6px; align-items: start;
+      padding: 4px 6px; border: 1px solid #e2e8f0; border-radius: 8px; background: #fff;
+    }
+    body.chalk .note-row, body.blueprint .note-row,
+    body.kraft .note-row, body.neon .note-row { border-color: #2b3744; background: #141b22; }
+    .note-row.note-sketch { border-left: 3px solid #1f6feb; }
+    body.chalk .note-row.note-sketch, body.blueprint .note-row.note-sketch,
+    body.kraft .note-row.note-sketch, body.neon .note-row.note-sketch { border-left-color: #8ab4ff; }
+    .note-badge {
+      flex: 0 0 auto; align-self: center; font-size: 11px; font-weight: 700; letter-spacing: .02em;
+      color: #1f6feb; background: rgba(31,111,235,.12);
+      padding: 2px 7px; border-radius: 999px; white-space: nowrap;
+    }
+    body.chalk .note-badge, body.blueprint .note-badge,
+    body.kraft .note-badge, body.neon .note-badge { color: #8ab4ff; background: rgba(138,180,255,.16); }
+    .note-row textarea.field { flex: 1 1 auto; resize: vertical; min-height: 34px; font-size: 13px; }
+    .note-row .xbtn { flex: 0 0 auto; padding: 2px 7px; font-size: 13px; }
+
+    /* 3D context-panel helpers (view presets + transform sliders). */
+    .btn-grid { display: flex; flex-wrap: wrap; gap: 6px; }
+    .btn-grid .btn { flex: 1 1 auto; min-width: 84px; }
+    .rot-row { display: flex; align-items: center; gap: 8px; margin: 4px 0; }
+    .rot-row label { width: 50px; font-size: 13px; }
+    .rot-row input[type=range] { flex: 1; min-width: 0; }
+    .rot-row .rot-val {
+      width: 44px; text-align: right; font-size: 12px; color: #64748b;
+    }
+    /* Per-item transform rows (Position X/Y/Z + Scale) in the 3D Transform card. */
+    .vec-row { display: flex; align-items: center; gap: 8px; margin: 4px 0; }
+    .vec-row label { width: 50px; font-size: 13px; }
+    .vec-row input { flex: 1; min-width: 0; }
+    /* Scene item list (multi-object 3D scene). */
+    .scene-list {
+      list-style: none; margin: 6px 0 0; padding: 0;
+      display: flex; flex-direction: column; gap: 4px;
+      max-height: 240px; overflow: auto;
+    }
+    .scene-list li {
+      display: flex; align-items: center; gap: 8px; padding: 6px 8px;
+      border-radius: 7px; border: 1px solid #e2e8f0; background: #fff;
+      cursor: pointer; font-size: 13px;
+    }
+    .scene-list li:hover { background: rgba(31,111,235,.08); }
+    .scene-list li.selected { border-color: #3b82f6; background: rgba(59,130,246,.12); color: #1f6feb; }
+    .scene-list li .badge { font-size: 11px; color: #64748b; margin-left: auto; }
+    body.chalk .scene-list li, body.blueprint .scene-list li,
+    body.kraft .scene-list li, body.neon .scene-list li {
+      border-color: #2b3744; background: rgba(255,255,255,.04);
+    }
+    body.chalk .scene-list li.selected, body.blueprint .scene-list li.selected,
+    body.kraft .scene-list li.selected, body.neon .scene-list li.selected {
+      border-color: #8ab4ff; background: rgba(138,180,255,.16); color: #8ab4ff;
+    }
+    .preset-active { border-color: #3b82f6 !important; color: #3b82f6 !important; }
+    body.chalk .preset-active, body.blueprint .preset-active,
+    body.kraft .preset-active, body.neon .preset-active {
+      border-color: #8ab4ff !important; color: #8ab4ff !important;
+    }
+
+    /* ---- top menu bar (Shapes / Materials / Tools / Edit) ---------------- */
+    .menubar {
+      flex-basis: 100%; display: flex; flex-wrap: wrap; align-items: center;
+      gap: 2px; margin-top: 2px; padding-top: 6px;
+      border-top: 1px solid #e2e8f0;
+    }
+    body.chalk .menubar, body.blueprint .menubar,
+    body.kraft .menubar, body.neon .menubar { border-top-color: #2b3744; }
+    .menu { position: relative; }
+    .menu-title {
+      font: inherit; cursor: pointer; border: 1px solid transparent;
+      background: transparent; color: #0f172a; padding: 5px 11px; border-radius: 7px;
+    }
+    .menu-title:hover, .menu.open > .menu-title { background: rgba(15,23,42,.06); }
+    body.chalk .menu-title, body.blueprint .menu-title,
+    body.kraft .menu-title, body.neon .menu-title { color: #e8eef2; }
+    body.chalk .menu-title:hover, body.blueprint .menu-title:hover,
+    body.kraft .menu-title:hover, body.neon .menu-title:hover,
+    .menu.open > .menu-title { background: rgba(15,23,42,.06); }
+    body.chalk .menu.open > .menu-title, body.blueprint .menu.open > .menu-title,
+    body.kraft .menu.open > .menu-title, body.neon .menu.open > .menu-title { background: rgba(255,255,255,.10); }
+    .menu-dropdown {
+      display: none; position: absolute; z-index: 40; top: calc(100% + 5px); left: 0;
+      min-width: 200px; padding: 6px; border-radius: 10px;
+      background: #fff; border: 1px solid #e2e8f0;
+      box-shadow: 0 12px 32px rgba(15,23,42,.18);
+    }
+    .menu.open > .menu-dropdown { display: block; }
+    .menu-dropdown button {
+      display: flex; align-items: center; gap: 8px; width: 100%; text-align: left;
+      font: inherit; cursor: pointer; border: none; background: transparent; color: #0f172a;
+      padding: 7px 10px; border-radius: 7px;
+    }
+    .menu-dropdown button:hover { background: rgba(31,111,235,.10); }
+    .menu-dropdown button.active { background: rgba(31,111,235,.16); font-weight: 600; }
+    .menu-dropdown .sw { width: 12px; height: 12px; border-radius: 3px; border: 1px solid rgba(0,0,0,.18); flex: 0 0 auto; }
+    .menu-sep { border: none; border-top: 1px solid #e2e8f0; margin: 5px 2px; }
+    body.chalk .menu-dropdown, body.blueprint .menu-dropdown,
+    body.kraft .menu-dropdown, body.neon .menu-dropdown {
+      background: #141b22; border-color: #2b3744; color: #e8eef2;
+    }
+    body.chalk .menu-dropdown button, body.blueprint .menu-dropdown button,
+    body.kraft .menu-dropdown button, body.neon .menu-dropdown button { color: #e8eef2; }
+    body.chalk .menu-dropdown button:hover, body.blueprint .menu-dropdown button:hover,
+    body.kraft .menu-dropdown button:hover, body.neon .menu-dropdown button:hover { background: rgba(138,180,255,.16); }
+    body.chalk .menu-sep, body.blueprint .menu-sep,
+    body.kraft .menu-sep, body.neon .menu-sep { border-top-color: #2b3744; }
   </style>
 
   <script src="/static/fabric.min.js"></script>
 </head>
 
-<body class="bg-slate-100 font-sans text-ink">
+<body class="bg-slate-100 font-sans text-ink flex h-screen flex-col overflow-hidden">
   <header class="sticky top-0 z-10 flex flex-wrap items-center gap-3 border-b border-line bg-white/90 px-4 py-2.5 shadow-sm backdrop-blur">
     <div class="text-lg font-extrabold tracking-tight text-ink">✏️ sketchDiy</div>
 
-    <div class="flex flex-1 flex-wrap items-center gap-2">
+    <div class="ws-tabs" role="tablist" aria-label="Workspace">
+      <button class="ws-tab active" data-view="2d" role="tab" aria-selected="true">2D Design</button>
+      <button class="ws-tab" data-view="3d" role="tab" aria-selected="false">3D Model</button>
+      <button class="ws-tab" data-view="plan" role="tab" aria-selected="false">📋 Plan</button>
+    </div>
+
+    <div id="toolbar2d" class="flex flex-1 flex-wrap items-center gap-2">
       <button class="btn" data-shape="rect"><span class="sw"></span>▭ Rect</button>
+      <button class="btn" data-shape="rounded"><span class="sw"></span>▢ RRect</button>
+      <button class="btn" data-shape="ellipse"><span class="sw"></span>◯ Ellipse</button>
       <button class="btn" data-shape="circle"><span class="sw"></span>● Circle</button>
+      <button class="btn" data-shape="triangle"><span class="sw"></span>△ Tri</button>
+      <button class="btn" data-shape="pentagon"><span class="sw"></span>⬠ Pent</button>
+      <button class="btn" data-shape="hexagon"><span class="sw"></span>⬡ Hex</button>
+      <button class="btn" data-shape="octagon"><span class="sw"></span>⯃ Oct</button>
+      <button class="btn" data-shape="star"><span class="sw"></span>★ Star</button>
+      <button class="btn" data-shape="diamond"><span class="sw"></span>◇ Diam</button>
+      <button class="btn" data-shape="trapezoid"><span class="sw"></span>⏢ Trap</button>
+      <button class="btn" data-shape="parallelogram"><span class="sw"></span>▱ Paral</button>
+      <button class="btn" data-shape="arrow"><span class="sw"></span>➤ Arrow</button>
       <button class="btn" data-shape="line"><span class="sw"></span>／ Line</button>
       <button class="btn" data-shape="text"><span class="sw"></span>T Text</button>
+      <button class="btn" data-shape="free" title="Freehand sketch — drag on the canvas to draw, Esc to stop"><span class="sw"></span>✎ Free</button>
       <button id="dimBtn" class="btn" title="Measure a distance: click two points (Esc cancels)">↔ Dimension</button>
       <button id="connectBtn" class="btn" title="Select two objects, then link them with a connector line">🔗 Connect</button>
       <span class="sep"></span>
@@ -208,224 +526,243 @@
       <a class="xbtn" href="/api/export/png" target="_blank">PNG</a>
       <a class="xbtn" href="/api/export/pdf" target="_blank">PDF</a>
       <a class="xbtn" href="/api/export/dxf" download="sketch.dxf">DXF</a>
-      <a class="xbtn" href="/api/export/gcode" download="sketch.nc">G-code</a>
+      <a id="gcodeLink" class="xbtn" href="/api/export/gcode" download="sketch.nc" title="G-code (NC) — profiling cut">G-code</a>
+      <span class="gc-opts" title="End-mill diameter (mm). Offsets outlines so the cut edge matches the drawing; holes are offset inward. 0 = centreline.">
+        &#8960;<input id="gcTool" class="field" type="number" min="0" step="0.5" value="0" style="width:4.5em" />
+      </span>
+      <span class="gc-opts" title="Max Z step per roughing pass (mm). 0 = single plunge.">
+        Z&#8595;<input id="gcPass" class="field" type="number" min="0" step="0.5" value="0" style="width:4.5em" />
+      </span>
     </div>
+
+    <nav class="menubar" aria-label="Main menu">
+      <div class="menu">
+        <button class="menu-title" aria-haspopup="true" aria-expanded="false">Shapes</button>
+        <div class="menu-dropdown">
+          <button data-action="shape-rect"><span class="sw"></span>▭ Rectangle</button>
+          <button data-action="shape-rounded"><span class="sw"></span>▢ Rounded</button>
+          <button data-action="shape-ellipse"><span class="sw"></span>◯ Ellipse</button>
+          <button data-action="shape-circle"><span class="sw"></span>● Circle</button>
+          <button data-action="shape-triangle"><span class="sw"></span>△ Triangle</button>
+          <button data-action="shape-pentagon"><span class="sw"></span>⬠ Pentagon</button>
+          <button data-action="shape-hexagon"><span class="sw"></span>⬡ Hexagon</button>
+          <button data-action="shape-heptagon"><span class="sw"></span>⑦ Heptagon</button>
+          <button data-action="shape-octagon"><span class="sw"></span>⯃ Octagon</button>
+          <button data-action="shape-star"><span class="sw"></span>★ Star</button>
+          <button data-action="shape-diamond"><span class="sw"></span>◇ Diamond</button>
+          <button data-action="shape-trapezoid"><span class="sw"></span>⏢ Trapezoid</button>
+          <button data-action="shape-parallelogram"><span class="sw"></span>▱ Parallelogram</button>
+          <button data-action="shape-arrow"><span class="sw"></span>➤ Arrow</button>
+          <hr class="menu-sep" />
+          <button data-action="shape-line"><span class="sw"></span>／ Line</button>
+          <button data-action="shape-text"><span class="sw"></span>T Text</button>
+          <button data-action="shape-free" title="Freehand sketch — drag to draw, Esc to stop"><span class="sw"></span>✎ Freehand</button>
+        </div>
+      </div>
+      <div class="menu">
+        <button class="menu-title" aria-haspopup="true" aria-expanded="false">Materials</button>
+        <div class="menu-dropdown">
+          <button data-action="material-wood">🟫 Wood</button>
+          <button data-action="material-steel">⚙️ Steel</button>
+          <button data-action="material-aluminium">🔩 Aluminium</button>
+          <button data-action="material-acrylic">🔷 Acrylic</button>
+          <button data-action="material-glass">🩵 Glass</button>
+          <button data-action="material-pine">🌲 Pine</button>
+          <button data-action="material-oak">🟤 Oak</button>
+          <button data-action="material-black">⬛ Black</button>
+        </div>
+      </div>
+      <div class="menu">
+        <button class="menu-title" aria-haspopup="true" aria-expanded="false">Tools</button>
+        <div class="menu-dropdown">
+          <button data-action="tool-eraser" title="Click or drag over objects to delete them">🧽 Eraser</button>
+          <button data-action="tool-group" title="Combine the selected objects into one group">🔲 Group</button>
+          <button data-action="tool-ungroup" title="Split the selected group back into separate objects">🔓 Ungroup</button>
+          <hr class="menu-sep" />
+          <button data-action="tool-dimension">↔ Dimension</button>
+          <button data-action="tool-connect">🔗 Connect</button>
+          <button data-action="tool-delete">🗑 Delete</button>
+        </div>
+      </div>
+      <div class="menu">
+        <button class="menu-title" aria-haspopup="true" aria-expanded="false">Edit</button>
+        <div class="menu-dropdown">
+          <button data-action="edit-undo">↶ Undo</button>
+          <button data-action="edit-redo">↷ Redo</button>
+          <button data-action="edit-clear">🗑 Clear all</button>
+        </div>
+      </div>
+    </nav>
   </header>
 
-  <main class="flex flex-col gap-4 p-4 lg:h-[calc(100vh-3.25rem)] lg:flex-row lg:overflow-hidden">
-    <section class="canvas-wrap flex min-h-[60vh] flex-1 items-center justify-center overflow-auto rounded-xl border border-line bg-white p-3 shadow-sm lg:min-h-0">
-      <canvas id="c"></canvas>
-    </section>
+  <main class="workspace">
+    <!-- ===================== 2D Design workspace ===================== -->
+    <div id="view2d" class="view view--active">
+      <section class="canvas-wrap flex min-h-[60vh] flex-1 items-start justify-center overflow-auto rounded-xl border border-line bg-white p-3 shadow-sm lg:min-h-0">
+        <canvas id="c"></canvas>
+      </section>
 
-    <aside class="panel flex w-full flex-col gap-4 overflow-auto lg:w-[360px]">
-      <div class="card">
-        <h3>Properties</h3>
-        <div id="props" class="hint">Select an object to edit it.</div>
-        <div id="propsBody" hidden>
-          <label class="field-label">Stroke <input type="color" id="pStroke" value="#222222" /></label>
-          <div class="field-label">Fill
-            <input type="color" id="pFill" value="#ffffff" />
-            <label class="check-label"><input type="checkbox" id="pFillNone" /> none</label>
+      <aside class="panel flex w-full flex-col gap-4 overflow-auto lg:w-[360px]">
+        <div class="card">
+          <h3>Properties</h3>
+          <div id="props" class="hint">Select an object to edit it.</div>
+          <div id="propsBody" hidden>
+            <label class="field-label">Stroke <input type="color" id="pStroke" value="#222222" /></label>
+            <div class="field-label">Fill
+              <input type="color" id="pFill" value="#ffffff" />
+              <label class="check-label"><input type="checkbox" id="pFillNone" /> none</label>
+            </div>
+            <label class="field-label">Stroke width
+              <input type="range" id="pWidth" min="0" max="20" value="2" class="flex-1" />
+              <span id="pWidthVal" class="text-sm text-muted">2</span>
+            </label>
+            <div id="selSize" class="size-readout"></div>
+            <label class="check-label" title="Lock so this object can't be selected or moved (use 'Unlock all' to release)">
+              <input type="checkbox" id="pLock" /> Lock
+            </label>
           </div>
-          <label class="field-label">Stroke width
-            <input type="range" id="pWidth" min="0" max="20" value="2" class="flex-1" />
-            <span id="pWidthVal" class="text-sm text-muted">2</span>
-          </label>
-          <div id="selSize" class="size-readout"></div>
-          <label class="check-label" title="Lock so this object can't be selected or moved (use 'Unlock all' to release)">
-            <input type="checkbox" id="pLock" /> Lock
-          </label>
         </div>
-      </div>
 
-      <div class="card">
-        <h3>Page <small>(size · color · grid · rulers)</small></h3>
-        <p class="hint">Set the artboard size in the current units, its background
-          colour, the grid colour/visibility, and whether the measurement rulers
-          show. Changes apply live and are saved with the document.</p>
-        <div class="tpl-params">
-          <label>Width
-            <input type="number" id="pageW" class="field" min="1" step="1" />
+        <div class="card">
+          <h3>Page <small>(size · color · grid · rulers)</small></h3>
+          <p class="hint">Set the artboard size in the current units, its background
+            colour, the grid colour/visibility, and whether the measurement rulers
+            show. Changes apply live and are saved with the document.</p>
+          <div class="tpl-params">
+            <label>Width
+              <input type="number" id="pageW" class="field" min="1" step="1" />
+            </label>
+            <label>Height
+              <input type="number" id="pageH" class="field" min="1" step="1" />
+            </label>
+            <label>Background
+              <input type="color" id="pageBg" value="#ffffff" />
+            </label>
+            <label>Grid
+              <input type="color" id="gridColor" value="#eef2f7" />
+            </label>
+            <label>Grid size (px)
+              <input type="number" id="gridSize" class="field" min="4" max="200" step="1" value="20" />
+            </label>
+          </div>
+          <label class="check-label" title="Show the drafting grid on the artboard">
+            <input type="checkbox" id="gridToggle" checked /> Show grid
           </label>
-          <label>Height
-            <input type="number" id="pageH" class="field" min="1" step="1" />
+          <label class="check-label" title="Bake the grid into SVG / PNG / PDF exports (hairlines) and the DXF (GRID layer). In G-code it is added as a non-cutting rapid reference pass at safe Z — the tool never plunges into it.">
+            <input type="checkbox" id="exportGrid" /> Include grid in export
           </label>
-          <label>Background
-            <input type="color" id="pageBg" value="#ffffff" />
+          <label class="check-label" title="Show the top/left measurement rulers and the scale bar">
+            <input type="checkbox" id="pageRulers" checked /> Show rulers
           </label>
-          <label>Grid
-            <input type="color" id="gridColor" value="#eef2f7" />
-          </label>
-          <label>Grid size (px)
-            <input type="number" id="gridSize" class="field" min="4" max="200" step="1" value="20" />
-          </label>
-        </div>
-        <label class="check-label" title="Show the drafting grid on the artboard">
-          <input type="checkbox" id="gridToggle" checked /> Show grid
-        </label>
-        <label class="check-label" title="Bake the grid into SVG / PNG / PDF exports (hairlines) and the DXF (GRID layer). In G-code it is added as a non-cutting rapid reference pass at safe Z — the tool never plunges into it.">
-          <input type="checkbox" id="exportGrid" /> Include grid in export
-        </label>
-        <label class="check-label" title="Show the top/left measurement rulers and the scale bar">
-          <input type="checkbox" id="pageRulers" checked /> Show rulers
-        </label>
-        <label class="field-label">Theme
-          <select id="themeSelect" class="field">
-            <option value="light">Light (paper)</option>
-            <option value="chalk">Chalkboard</option>
-            <option value="blueprint">Blueprint</option>
-            <option value="kraft">Kraft paper</option>
-            <option value="neon">Neon</option>
-          </select>
-        </label>
-        <label class="check-label" title="When on, switching themes also repaints your existing shapes to the theme palette. Off (default) keeps your artwork's own colours and only changes the board, UI and new-shape defaults.">
-          <input type="checkbox" id="recolorOnTheme" /> Recolor artwork on theme change
-        </label>
-        <button id="resetTheme" class="btn btn-primary" type="button"
-          title="Re-apply this theme's default board, grid and colours (after manual tweaks)">Reset page to theme</button>
-      </div>
-
-      <div class="card">
-        <h3>Image → paths <small>(trace)</small></h3>
-        <p class="hint">Upload a logo or photo and trace it into editable
-          <code>path</code> objects. Works best on dark shapes over a light
-          background; use <em>Edges</em> for line art.</p>
-        <label class="field-label flex-wrap">Image
-          <input type="file" id="traceFile" accept="image/*" />
-        </label>
-        <label class="field-label">Mode
-          <select id="traceMode" class="field">
-            <option value="outline">Outline (filled shapes)</option>
-            <option value="edges">Edges (line art)</option>
-          </select>
-        </label>
-        <label class="field-label">Threshold
-          <input type="range" id="traceThreshold" min="0" max="255" value="128" class="flex-1" />
-          <span id="traceThresholdVal" class="text-sm text-muted">128</span>
-        </label>
-        <label class="check-label"><input type="checkbox" id="traceInvert" /> Invert</label>
-        <label class="check-label" title="Round the traced polylines into smooth curves">
-          <input type="checkbox" id="traceSmooth" /> Smooth curves
-        </label>
-        <label class="check-label" title="Optional: needs rembg installed (pip install &quot;rembg[cpu]&quot;)">
-          <input type="checkbox" id="traceRemBg" /> Remove background (rembg)
-        </label>
-        <div class="console-actions">
-          <button id="traceBtn" class="btn btn-primary">✎ Trace to paths</button>
-          <span id="traceStatus"></span>
-        </div>
-      </div>
-
-      <div class="card">
-        <h3>Templates <small>(M4)</small></h3>
-        <p class="hint">Pick a starter layout, set its size, and generate. Built from
-          the console helpers (<code>row</code>/<code>column</code>/<code>grid</code>/
-          <code>connect</code>); edit the result or open the console to see the code.</p>
-        <label class="field-label">Template
-          <select id="tplSelect" class="field">
-            <option value="shelf">📚 Shelf unit</option>
-            <option value="drillGrid">🕳 Drill guide</option>
-            <option value="box">📦 Box / crate</option>
-            <option value="mat">🔲 Cutting mat</option>
-          </select>
-        </label>
-        <div id="tplParams" class="tpl-params"></div>
-        <div class="console-actions">
-          <button id="tplGenerate" class="btn btn-primary">▶ Generate</button>
-        </div>
-      </div>
-
-      <div class="card">
-        <h3>Projects <small>(M5)</small></h3>
-        <p class="hint">Your work auto-saves to this browser. Save named copies on the
-          server, or press <kbd>Ctrl</kbd>+<kbd>Z</kbd> to undo.</p>
-        <label class="field-label">Save as
-          <input type="text" id="projName" class="field" placeholder="my-shelf" />
-        </label>
-        <div class="console-actions">
-          <button id="projSave" class="btn btn-primary">💾 Save</button>
-        </div>
-        <div id="projList" class="proj-list"></div>
-      </div>
-
-      <div class="card">
-        <h3>Layers <small>(M5)</small></h3>
-        <p class="hint">Group objects into named layers. Click a layer to make it
-          active (new shapes go there) and select its objects. Toggle visibility
-          (👁) to hide a layer in the canvas and every export, or lock (🔒) to
-          keep its objects from being moved.</p>
-        <div id="layerList" class="layer-list"></div>
-        <div class="console-actions">
-          <button id="layerAdd" class="btn">＋ Add layer</button>
-          <button id="layerDelete" class="btn">🗑 Delete</button>
-          <span id="layerStatus"></span>
-        </div>
-      </div>
-
-      <div class="card">
-        <h3>3D Solid <small>(build123d)</small></h3>
-        <p class="hint">Turn the sketch into a solid. Select shapes first and use
-          <em>Build selection</em>, or <em>Build all</em> for the whole page.
-          Drag to rotate, scroll to zoom. STEP export needs build123d installed.
-          For <em>Revolve</em>, set the spin axis (a vertical line in the sketch):
-          enter its X in mm, or click <em>Pick axis</em> and click the sketch.
-          For <em>Sweep</em>, select a closed profile plus an open path (a line or
-          path shape) — the profile is swept along the path into a solid.</p>
-        <div class="tpl-params">
-          <label>Operation
-            <select id="d3op" class="field">
-              <option value="extrude">Extrude</option>
-              <option value="revolve">Revolve (lathe)</option>
-              <option value="sweep">Sweep (path)</option>
+          <label class="field-label">Theme
+            <select id="themeSelect" class="field">
+              <option value="light">Light (paper)</option>
+              <option value="chalk">Chalkboard</option>
+              <option value="blueprint">Blueprint</option>
+              <option value="kraft">Kraft paper</option>
+              <option value="neon">Neon</option>
             </select>
           </label>
-          <label id="d3depthWrap">Thickness (mm)
-            <input type="number" id="d3depth" class="field" min="0.1" step="0.5" value="10" />
+          <label class="check-label" title="When on, switching themes also repaints your existing shapes to the theme palette. Off (default) keeps your artwork's own colours and only changes the board, UI and new-shape defaults.">
+            <input type="checkbox" id="recolorOnTheme" /> Recolor artwork on theme change
           </label>
-          <label id="d3angleWrap" hidden>Angle (°)
-            <input type="number" id="d3angle" class="field" min="1" max="360" step="5" value="360" />
+          <button id="resetTheme" class="btn btn-primary" type="button"
+            title="Re-apply this theme's default board, grid and colours (after manual tweaks)">Reset page to theme</button>
+        </div>
+
+        <div class="card">
+          <h3>Image → paths <small>(trace)</small></h3>
+          <p class="hint">Upload a logo or photo and trace it into editable
+            <code>path</code> objects. Works best on dark shapes over a light
+            background; use <em>Edges</em> for line art.</p>
+          <label class="field-label flex-wrap">Image
+            <input type="file" id="traceFile" accept="image/*" />
           </label>
-          <label id="d3axisWrap" hidden>Axis X (mm)
-            <input type="number" id="d3axis" class="field" step="0.5" placeholder="auto" />
-          </label>
-          <button id="d3pick" class="btn" type="button" hidden
-            title="Click on the sketch to place the revolve axis">↕ Pick axis</button>
-          <label id="d3qualityWrap">Quality
-            <select id="d3quality" class="field">
-              <option value="low">Low</option>
-              <option value="medium" selected>Medium</option>
-              <option value="high">High</option>
+          <label class="field-label">Mode
+            <select id="traceMode" class="field">
+              <option value="outline">Outline (filled shapes)</option>
+              <option value="edges">Edges (line art)</option>
             </select>
           </label>
+          <label class="field-label">Threshold
+            <input type="range" id="traceThreshold" min="0" max="255" value="128" class="flex-1" />
+            <span id="traceThresholdVal" class="text-sm text-muted">128</span>
+          </label>
+          <label class="check-label"><input type="checkbox" id="traceInvert" /> Invert</label>
+          <label class="check-label" title="Round the traced polylines into smooth curves">
+            <input type="checkbox" id="traceSmooth" /> Smooth curves
+          </label>
+          <label class="check-label" title="Optional: needs rembg installed (pip install &quot;rembg[cpu]&quot;)">
+            <input type="checkbox" id="traceRemBg" /> Remove background (rembg)
+          </label>
+          <div class="console-actions">
+            <button id="traceBtn" class="btn btn-primary">✎ Trace to paths</button>
+            <span id="traceStatus"></span>
+          </div>
         </div>
-        <p id="d3sweepHint" class="hint" hidden>Sweep needs a <em>closed profile</em>
-          plus an <em>open path</em> (a line or path shape). Select both, then build.</p>
-        <canvas id="d3canvas" class="d3-canvas" width="320" height="240"></canvas>
-        <div class="console-actions">
-          <label class="check-label"><input type="checkbox" id="d3wire" /> Wireframe</label>
-          <label class="check-label"><input type="checkbox" id="d3grid" checked /> Grid + axes</label>
-        </div>
-        <div class="console-actions">
-          <button id="d3ExtrudeSel" class="btn">⬗ Build selection</button>
-          <button id="d3ExtrudeAll" class="btn btn-primary">⬗ Build all</button>
-          <button id="d3reset" class="btn" type="button" title="Re-fit the camera to the model">⤢ Reset view</button>
-        </div>
-        <div class="console-actions">
-          <button id="d3stl" class="xbtn" disabled>⬇ STL</button>
-          <button id="d3step" class="xbtn" disabled>⬇ STEP</button>
-          <span id="d3status" class="hint"></span>
-        </div>
-      </div>
 
-      <div class="card card-grow">
-        <h3>Python console <small>(Hybrid mode)</small></h3>
-        <p class="hint">Try: <code>rect(450, 350, 120, 80, fill="#ffe066")</code> or
-          <code>clear()</code> then build a layout. Helpers:
-          <code>rect, circle, line, path, text, dimension, add, clear, doc</code>.
-          Link objects with <code>connect(a, b, "left", "right")</code>; arrange groups
-          with <code>row(parts)</code>, <code>column(parts)</code>,
-          <code>grid(parts, 3)</code>.</p>
-        <textarea id="code" spellcheck="false"># build a shelf unit, then link the uprights
+        <div class="card">
+          <h3>Templates <small>(M4)</small></h3>
+          <p class="hint">Pick a starter layout, set its size, and generate. Built from
+            the console helpers (<code>row</code>/<code>column</code>/<code>grid</code>/
+            <code>connect</code>); edit the result or open the console to see the code.</p>
+          <label class="field-label">Template
+            <select id="tplSelect" class="field">
+              <option value="shelf">📚 Shelf unit</option>
+              <option value="drillGrid">🕳 Drill guide</option>
+              <option value="box">📦 Box / crate</option>
+              <option value="mat">🔲 Cutting mat</option>
+            </select>
+          </label>
+          <div id="tplParams" class="tpl-params"></div>
+          <div class="console-actions">
+            <button id="tplGenerate" class="btn btn-primary">▶ Generate</button>
+          </div>
+        </div>
+
+        <div class="card">
+          <h3>Projects <small>(M5)</small></h3>
+          <p class="hint">Your work auto-saves to this browser. Save named copies on the
+            server, or press <kbd>Ctrl</kbd>+<kbd>Z</kbd> to undo.</p>
+          <label class="field-label">Save as
+            <input type="text" id="projName" class="field" placeholder="my-shelf" />
+          </label>
+          <div class="console-actions">
+            <button id="projSave" class="btn btn-primary">💾 Save</button>
+          </div>
+          <div id="projList" class="proj-list"></div>
+        </div>
+
+        <div class="card">
+          <h3>Layers <small>(M5)</small></h3>
+          <p class="hint">Group objects into named layers. Click a row to make it
+            active (new shapes land there) and select its objects. Drag rows to
+            reorder (stacking) or use ↑/↓. Toggle 👁 (hide in canvas + every
+            export), 🔒 (lock), ○ (solo — show only this layer) and the colour tag.
+            To organise <em>existing</em> art, select it on the canvas, pick a
+            target below, then <em>Move selection ▸</em>.</p>
+          <div id="layerList" class="layer-list"></div>
+          <div class="console-actions">
+            <button id="layerAdd" class="btn">＋ Add layer</button>
+            <button id="layerDelete" class="btn">🗑 Delete</button>
+            <span id="layerStatus"></span>
+          </div>
+          <div class="console-actions">
+            <select id="layerTarget" class="field" title="Target layer for the selection"></select>
+            <button id="layerSend" class="btn" title="Move the current canvas selection onto the chosen layer">Move selection ▸</button>
+          </div>
+        </div>
+
+        <div class="card card-grow">
+          <h3>Python console <small>(Hybrid mode)</small></h3>
+          <p class="hint">Try: <code>rect(450, 350, 120, 80, fill="#ffe066")</code> or
+            <code>clear()</code> then build a layout. Helpers:
+            <code>rect, circle, line, path, text, dimension, add, clear, doc</code>.
+            Link objects with <code>connect(a, b, "left", "right")</code>; arrange groups
+            with <code>row(parts)</code>, <code>column(parts)</code>,
+            <code>grid(parts, 3)</code>. Switch to <strong>3D Model</strong> (top) to
+            extrude the result.</p>
+          <textarea id="code" spellcheck="false"># build a shelf unit, then link the uprights
 clear()
 for i in range(3):
     rect(450, 200 + i*120, 300, 14, fill="#d9b38c", stroke="#7a5230")
@@ -436,14 +773,271 @@ dimension(300, 580, 600, 580, offset=-24)
 # anchor-based connector: follows the uprights when they move
 connect(left, right, "right", "left")
 </textarea>
-        <div class="console-actions">
-          <button id="runBtn" class="btn btn-primary">▶ Run</button>
-          <button id="resetBtn" class="btn">↺ Reset scene</button>
-          <span id="runStatus"></span>
+          <div class="console-actions">
+            <button id="runBtn" class="btn btn-primary">▶ Run</button>
+            <button id="resetBtn" class="btn">↺ Reset scene</button>
+            <span id="runStatus"></span>
+          </div>
         </div>
-      </div>
-    </aside>
+      </aside>
+    </div>
+
+    <!-- ===================== 3D Model workspace ====================== -->
+    <div id="view3d" class="view">
+      <section class="viewport3d">
+        <canvas id="d3canvas" class="d3-viewport"></canvas>
+        <div class="vp-hint">Drag to orbit · scroll to zoom · right-drag to pan</div>
+      </section>
+
+      <aside class="panel panel-3d flex w-full flex-col gap-4 overflow-auto lg:w-[360px]">
+        <div class="card">
+          <h3>Build solid <small>(from the 2D sketch)</small></h3>
+          <p class="hint">Switch to <strong>2D Design</strong> to select shapes, then
+            use <em>Build selection</em>. Or <em>Build all</em> for the whole page.
+            Drag to orbit, scroll to zoom. STEP export needs build123d installed.
+            For <em>Revolve</em>, set the spin axis X (mm) or click
+            <em>Pick axis</em> in 2D. For <em>Sweep</em>, select a closed profile
+            plus an open path (a line or path shape).</p>
+          <div class="tpl-params">
+            <label>Operation
+              <select id="d3op" class="field">
+                <option value="extrude">Extrude</option>
+                <option value="revolve">Revolve (lathe)</option>
+                <option value="sweep">Sweep (path)</option>
+              </select>
+            </label>
+            <label id="d3depthWrap">Thickness (mm)
+              <input type="number" id="d3depth" class="field" min="0.1" step="0.5" value="10" />
+            </label>
+            <label id="d3angleWrap" hidden>Angle (°)
+              <input type="number" id="d3angle" class="field" min="1" max="360" step="5" value="360" />
+            </label>
+            <label id="d3axisWrap" hidden>Axis X (mm)
+              <input type="number" id="d3axis" class="field" step="0.5" placeholder="auto" />
+            </label>
+            <button id="d3pick" class="btn" type="button" hidden
+              title="Click on the sketch to place the revolve axis">↕ Pick axis</button>
+            <label id="d3qualityWrap">Quality
+              <select id="d3quality" class="field">
+                <option value="low">Low</option>
+                <option value="medium" selected>Medium</option>
+                <option value="high">High</option>
+              </select>
+            </label>
+          </div>
+          <p id="d3sweepHint" class="hint" hidden>Sweep needs a <em>closed profile</em>
+            plus an <em>open path</em> (a line or path shape). Select both, then build.</p>
+          <div class="console-actions">
+            <button id="d3ExtrudeSel" class="btn">⬗ Build selection</button>
+            <button id="d3ExtrudeAll" class="btn btn-primary">⬗ Build all</button>
+          </div>
+          <div class="console-actions">
+            <span id="d3status" class="hint"></span>
+          </div>
+        </div>
+
+        <div class="card">
+          <h3>Primitives</h3>
+          <p class="hint">Add a ready-made 3D solid to the scene — no 2D sketch
+            needed. Pick a type, tweak its size, then <em>Add</em>. Select items in
+            the Scene list to move, rotate, scale or delete them.</p>
+          <div class="tpl-params">
+            <label>Type
+              <select id="d3prim" class="field">
+                <option value="box">Box</option>
+                <option value="sphere">Sphere</option>
+                <option value="cylinder">Cylinder</option>
+                <option value="cone">Cone</option>
+                <option value="torus">Torus</option>
+                <option value="capsule">Capsule</option>
+                <option value="pyramid">Pyramid</option>
+              </select>
+            </label>
+            <div id="d3primParams" class="tpl-params"></div>
+            <label>Quality
+              <select id="d3primQuality" class="field">
+                <option value="low">Low</option>
+                <option value="medium" selected>Medium</option>
+                <option value="high">High</option>
+              </select>
+            </label>
+          </div>
+          <div class="console-actions">
+            <button id="d3addPrim" class="btn btn-primary" type="button">⬢ Add primitive</button>
+          </div>
+        </div>
+
+        <div class="card">
+          <h3>View</h3>
+          <p class="hint">Snap the camera to a standard angle, or reset to frame the
+            model. Toggle shading and the ground grid.</p>
+          <div class="btn-grid">
+            <button class="btn" data-preset="top">⬓ Top</button>
+            <button class="btn" data-preset="front">▮ Front</button>
+            <button class="btn" data-preset="right">▥ Right</button>
+            <button class="btn" data-preset="perspective">◈ Persp</button>
+          </div>
+          <div class="console-actions">
+            <label class="check-label"><input type="checkbox" id="d3wire" /> Wireframe</label>
+            <label class="check-label"><input type="checkbox" id="d3grid" checked /> Grid + axes</label>
+            <button id="d3reset" class="btn" type="button" title="Re-fit the camera to the model">⤢ Reset view</button>
+          </div>
+          <label class="field-label">Shading
+            <select id="d3shade" class="field">
+              <option value="smooth" selected>Smooth</option>
+              <option value="flat">Flat</option>
+            </select>
+          </label>
+          <label class="field-label">Material
+            <input type="color" id="d3matcolor" value="#4696e6" />
+          </label>
+        </div>
+
+        <div class="card">
+          <h3>Transform</h3>
+          <p class="hint">Rotate the whole scene below. Select an item in the
+            Scene list to move, scale or spin just that one.</p>
+
+          <div id="d3selTransform" class="tpl-params" hidden>
+            <div class="vec-row"><label>Pos X</label>
+              <input type="number" id="posX" class="field" step="1" value="0" /></div>
+            <div class="vec-row"><label>Pos Y</label>
+              <input type="number" id="posY" class="field" step="1" value="0" /></div>
+            <div class="vec-row"><label>Pos Z</label>
+              <input type="number" id="posZ" class="field" step="1" value="0" /></div>
+            <div class="vec-row"><label>Scale</label>
+              <input type="number" id="scaleAll" class="field" min="0.05" step="0.05" value="1" /></div>
+            <div class="console-actions">
+              <button id="d3delete" class="btn" type="button">🗑 Delete item</button>
+            </div>
+          </div>
+
+          <div class="rot-row"><label>Rot X</label>
+            <input type="range" id="rotX" min="-180" max="180" value="0" />
+            <span class="rot-val" id="rotXVal">0°</span></div>
+          <div class="rot-row"><label>Rot Y</label>
+            <input type="range" id="rotY" min="-180" max="180" value="0" />
+            <span class="rot-val" id="rotYVal">0°</span></div>
+          <div class="rot-row"><label>Rot Z</label>
+            <input type="range" id="rotZ" min="-180" max="180" value="0" />
+            <span class="rot-val" id="rotZVal">0°</span></div>
+          <div class="console-actions">
+            <button id="rotReset" class="btn" type="button">↺ Reset rotation</button>
+          </div>
+        </div>
+
+        <div class="card">
+          <h3>Export</h3>
+          <p class="hint">Download the solid. STL works with or without build123d;
+            STEP needs it installed.</p>
+          <div class="console-actions">
+            <button id="d3stl" class="xbtn" disabled>⬇ STL</button>
+            <button id="d3step" class="xbtn" disabled>⬇ STEP</button>
+          </div>
+        </div>
+
+        <div class="card">
+          <h3>Scene</h3>
+          <p class="hint">Every solid in this 3D scene. Click to select; the
+            Transform controls above then apply to that item. Build from the 2D
+            sketch with <em>Build all</em>/<em>Build selection</em>, or add
+            primitives.</p>
+          <ul id="d3scene" class="scene-list"></ul>
+          <div class="console-actions">
+            <button id="d3clearScene" class="btn" type="button">Clear scene</button>
+          </div>
+        </div>
+      </aside>
+    </div>
+
+    <!-- ===================== Plan workspace ========================== -->
+    <div id="viewplan" class="view view-plan-area">
+      <section class="plan-area flex w-full flex-1 flex-col gap-4 overflow-auto">
+        <div class="card">
+          <h3>Project Plan <small>(shopping · assembly)</small></h3>
+          <p class="hint">A manual build plan for this project: what to buy and how
+            to assemble it. Everything here is saved with the document (like layers)
+            and survives auto-save / reload. Switch tabs to keep designing — the plan
+            stays attached to the project.</p>
+          <div id="planSummary" class="plan-summary">
+            <div class="stat"><span id="planStatItems" class="stat-num">0</span><span class="stat-lbl">buy items</span></div>
+            <div class="stat"><span id="planStatCost" class="stat-num">—</span><span class="stat-lbl">est. cost</span></div>
+            <div class="stat"><span id="planStatSteps" class="stat-num">0</span><span class="stat-lbl">steps</span></div>
+            <label class="plan-cur">Currency
+              <select id="planCurrency" class="field" title="Currency symbol for prices">
+                <option value="$">$ USD</option>
+                <option value="€">€ EUR</option>
+                <option value="£">£ GBP</option>
+                <option value="¥">¥ JPY</option>
+                <option value="₹">₹ INR</option>
+                <option value="A$">A$ AUD</option>
+                <option value="C$">C$ CAD</option>
+              </select>
+            </label>
+          </div>
+        </div>
+
+        <div class="card">
+          <h3>📐 Parts <small>(cut list · from drawing)</small></h3>
+          <p class="hint">Pull a bill of materials from the 2D sketch on request:
+            rects become panels, circles discs, lines bars — sized in the document's
+            units and grouped by layer. Editable name, material and unit cost; the
+            total updates live. Press <em>Regenerate</em> to re-sync with the
+            drawing (your material/price edits are kept where the shape still
+            matches).</p>
+          <div id="partList" class="part-list"></div>
+          <div class="console-actions">
+            <button id="partRegen" class="btn">⟳ Regenerate from drawing</button>
+            <span id="partStatus" class="hint"></span>
+            <span class="sb-spacer"></span>
+            <span class="buy-total">Parts total: <strong id="partTotal">—</strong></span>
+          </div>
+        </div>
+
+        <div class="card">
+          <h3>🛒 Shopping list <small>(what to buy)</small></h3>
+          <p class="hint">Hardware, materials and consumables the drawing can't tell
+            you about — screws, finish, glue, boards from the yard. Add a row per item;
+            the cost column is per unit and the total updates live.</p>
+          <div id="buyList" class="buy-list"></div>
+          <div class="console-actions">
+            <button id="buyAdd" class="btn">＋ Add item</button>
+            <span class="sb-spacer"></span>
+            <span class="buy-total">Total: <strong id="buyTotal">—</strong></span>
+          </div>
+        </div>
+
+        <div class="card">
+          <h3>🔧 Assembly steps <small>(build order)</small></h3>
+          <p class="hint">Numbered steps in the order you'll build them. Tick a step as
+            you go; drag the ⠿ handle to reorder, or use ↑/↓.</p>
+          <div id="stepList" class="step-list"></div>
+          <div class="console-actions">
+            <button id="stepAdd" class="btn">＋ Add step</button>
+          </div>
+        </div>
+
+        <div class="card">
+          <h3>📝 Notes <small>(project notes)</small></h3>
+          <p class="hint">Free-form notes for the project. Hand-drawn sketches on the
+            2D canvas are listed here automatically (✎), and you can add your own.
+            These notes are saved with the project file.</p>
+          <div class="note-scope">Project: <strong id="noteProject">Unsaved project</strong></div>
+          <div id="noteList" class="note-list"></div>
+          <div class="console-actions">
+            <button id="noteAdd" class="btn">＋ Add note</button>
+          </div>
+        </div>
+      </section>
+    </div>
   </main>
+
+  <footer id="statusbar" class="statusbar">
+    <span class="sb-pill" id="sbWorkspace">2D Design</span>
+    <span class="sb-pill" id="sbView">—</span>
+    <span class="sb-spacer"></span>
+    <span id="sbMsg">Ready · draw in 2D, then switch to 3D Model</span>
+  </footer>
 
   <!-- Frontend is split into ES modules under /static/js/ (no build step, no
        CDN). `app.js` is the entry point; it imports the others. `fabric.min.js`

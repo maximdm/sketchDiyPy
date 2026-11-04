@@ -18,4 +18,3 @@ matplotlib
 pillow
 scikit-image
 python-multipart
-pytest

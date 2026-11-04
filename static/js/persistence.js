@@ -33,6 +33,7 @@ function serializeCanvas() {
     snap_objects: state.doc.snap_objects,
     snap_page: state.doc.snap_page,
     layers: state.doc.layers,
+    plan: state.doc.plan,
     objects,
   };
 }
@@ -153,6 +154,9 @@ async function openProject(name) {
     await applyDoc(data);
     persistLocal(serializeCanvas());
     pushSnapshot(serializeCanvas());
+    // This project is now the scope for notes/plan; surface it in the UI.
+    state.projectName = name;
+    applyProjectScope();
   } catch (e) {
     alert("Open failed: " + e.message);
   }
@@ -177,11 +181,20 @@ $("projSave").addEventListener("click", async () => {
   try {
     await api("POST", "/api/project/save", { name });
     $("projName").value = "";
+    state.projectName = name;
+    applyProjectScope();
     await refreshProjectList();
   } catch (e) {
     alert("Save failed: " + e.message);
   }
 });
+
+// Reflect which project the notes/plan currently belong to (shown in the Notes
+// card header). An empty name means the scratch / unsaved project.
+function applyProjectScope() {
+  const el = $("noteProject");
+  if (el) el.textContent = state.projectName || "Unsaved project";
+}
 
 // ---- boot ---------------------------------------------------------------
 async function boot() {
@@ -216,10 +229,12 @@ async function boot() {
   // Baseline snapshot for undo; everything after is a new step.
   pushSnapshot(serializeCanvas());
   persistLocal(serializeCanvas());
+  applyProjectScope();
   await refreshProjectList();
 }
 
 export {
   serializeCanvas, persistLocal, pushSnapshot, recordChange, scheduleCommit,
   applyDoc, undo, redo, refreshProjectList, openProject, deleteProject, boot,
+  applyProjectScope,
 };
